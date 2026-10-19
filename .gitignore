@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+env/
+venv/
+*.so
+wandb/
+
+# Data & Models
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/vectordb/*
+!data/vectordb/.gitkeep
+models/*.bin
+models/*.safetensors
+results/tables/*.json
+!results/tables/.gitkeep
+
+# Logs & Temporary Files
+*.log
+*.aux
+*.out
+*.toc
+*.lof
+*.lot
+.tempmediaStorage/
+*.ipynb
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Large Deliverables Archive
+deliverables/*.zip
+
+# Secrets & Environment
+.env

@@ -1,0 +1,28 @@
+# HCAD-RAG pinned environment (Python 3.12 tested)
+torch>=2.1
+sentence-transformers>=2.7,<4.0
+spacy>=3.8
+thinc>=8.3  # numpy 2.x ABI compatible build required
+scispacy>=0.5.4,<0.6
+faiss-cpu>=1.7.4
+transformers>=4.40,<5.0
+scikit-learn>=1.3
+numpy>=1.26
+pandas>=2.0
+networkx>=3.1,<4.0
+matplotlib>=3.8,<4.0
+tqdm>=4.66
+python-dotenv>=1.0
+wandb>=0.17
+chromadb>=0.5
+ollama>=0.3
+tabulate>=0.9
+datasets>=2.19
+joblib>=1.3
+huggingface_hub>=0.23
+requests>=2.31
+# Optional: enables the live JEV Decision Gate (local calibrated mode works without it)
+typesafe-sdk
+# SciSpacy biomedical NER models (BOTH required — per-model loading is now fault-isolated)
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz

@@ -1,0 +1,193 @@
+{
+  "scoring_based_assessment": {
+    "Baseline LLM": {
+      "comprehensiveness": 74.0,
+      "diversity": 59.25,
+      "empowerment": 67.5,
+      "logical": 80.5,
+      "readability": 80.0,
+      "overall_score": 72.25
+    },
+    "Vanilla RAG": {
+      "comprehensiveness": 66.5,
+      "diversity": 44.5,
+      "empowerment": 63.0,
+      "logical": 73.75,
+      "readability": 76.25,
+      "overall_score": 64.8
+    },
+    "HCAD-RAG": {
+      "comprehensiveness": 67.5,
+      "diversity": 45.5,
+      "empowerment": 62.5,
+      "logical": 74.5,
+      "readability": 75.5,
+      "overall_score": 65.1
+    }
+  },
+  "scoring_based_assessment_by_source": {
+    "curated": {
+      "Baseline LLM": {
+        "comprehensiveness": 86.0,
+        "diversity": 76.0,
+        "empowerment": 80.0,
+        "logical": 91.0,
+        "readability": 87.0,
+        "overall_score": 84.0
+      },
+      "Vanilla RAG": {
+        "comprehensiveness": 74.0,
+        "diversity": 58.0,
+        "empowerment": 76.0,
+        "logical": 82.0,
+        "readability": 81.0,
+        "overall_score": 74.2
+      },
+      "HCAD-RAG": {
+        "comprehensiveness": 77.0,
+        "diversity": 62.0,
+        "empowerment": 74.0,
+        "logical": 84.0,
+        "readability": 83.0,
+        "overall_score": 76.0
+      }
+    },
+    "medqa": {
+      "Baseline LLM": {
+        "comprehensiveness": 70.0,
+        "diversity": 53.666666666666664,
+        "empowerment": 63.333333333333336,
+        "logical": 77.0,
+        "readability": 77.66666666666667,
+        "overall_score": 68.33333333333333
+      },
+      "Vanilla RAG": {
+        "comprehensiveness": 64.0,
+        "diversity": 40.0,
+        "empowerment": 58.666666666666664,
+        "logical": 71.0,
+        "readability": 74.66666666666667,
+        "overall_score": 61.666666666666664
+      },
+      "HCAD-RAG": {
+        "comprehensiveness": 64.33333333333333,
+        "diversity": 40.0,
+        "empowerment": 58.666666666666664,
+        "logical": 71.33333333333333,
+        "readability": 73.0,
+        "overall_score": 61.46666666666667
+      }
+    }
+  },
+  "selection_based_assessment": {
+    "HCAD_vs_Vanilla": {
+      "overall_win_rate_pct": 25.0,
+      "tie_rate_pct": 50.0,
+      "decisive_win_rate_pct": 50.0,
+      "criteria_win_rates_pct": {
+        "comprehensiveness": 40.0,
+        "empowerment": 50.0,
+        "accuracy": 25.0,
+        "relevance": 30.0,
+        "coherence": 30.0,
+        "clarity": 30.0,
+        "logical": 30.0,
+        "flexibility": 0.0
+      }
+    },
+    "HCAD_vs_Baseline": {
+      "overall_win_rate_pct": 10.0,
+      "tie_rate_pct": 25.0,
+      "decisive_win_rate_pct": 13.333333333333334,
+      "criteria_win_rates_pct": {
+        "comprehensiveness": 5.0,
+        "empowerment": 5.0,
+        "accuracy": 10.0,
+        "relevance": 10.0,
+        "coherence": 10.0,
+        "clarity": 10.0,
+        "logical": 10.0,
+        "flexibility": 0.0
+      }
+    }
+  },
+  "selection_based_assessment_by_source": {
+    "curated": {
+      "HCAD_vs_Vanilla": {
+        "overall_win_rate_pct": 20.0,
+        "tie_rate_pct": 40.0,
+        "decisive_win_rate_pct": 33.33333333333333,
+        "criteria_win_rates_pct": {
+          "comprehensiveness": 40.0,
+          "empowerment": 60.0,
+          "accuracy": 20.0,
+          "relevance": 20.0,
+          "coherence": 20.0,
+          "clarity": 20.0,
+          "logical": 20.0,
+          "flexibility": 0.0
+        }
+      },
+      "HCAD_vs_Baseline": {
+        "overall_win_rate_pct": 0.0,
+        "tie_rate_pct": 0.0,
+        "decisive_win_rate_pct": 0.0,
+        "criteria_win_rates_pct": {
+          "comprehensiveness": 0.0,
+          "empowerment": 0.0,
+          "accuracy": 0.0,
+          "relevance": 0.0,
+          "coherence": 0.0,
+          "clarity": 0.0,
+          "logical": 0.0,
+          "flexibility": 0.0
+        }
+      }
+    },
+    "medqa": {
+      "HCAD_vs_Vanilla": {
+        "overall_win_rate_pct": 26.666666666666668,
+        "tie_rate_pct": 53.333333333333336,
+        "decisive_win_rate_pct": 57.14285714285714,
+        "criteria_win_rates_pct": {
+          "comprehensiveness": 40.0,
+          "empowerment": 46.666666666666664,
+          "accuracy": 26.666666666666668,
+          "relevance": 33.33333333333333,
+          "coherence": 33.33333333333333,
+          "clarity": 33.33333333333333,
+          "logical": 33.33333333333333,
+          "flexibility": 0.0
+        }
+      },
+      "HCAD_vs_Baseline": {
+        "overall_win_rate_pct": 13.333333333333334,
+        "tie_rate_pct": 33.33333333333333,
+        "decisive_win_rate_pct": 20.0,
+        "criteria_win_rates_pct": {
+          "comprehensiveness": 6.666666666666667,
+          "empowerment": 6.666666666666667,
+          "accuracy": 13.333333333333334,
+          "relevance": 13.333333333333334,
+          "coherence": 13.333333333333334,
+          "clarity": 13.333333333333334,
+          "logical": 13.333333333333334,
+          "flexibility": 0.0
+        }
+      }
+    }
+  },
+  "retrieval_latency_seconds": {
+    "Vanilla RAG": 14.031015000000206,
+    "HCAD-RAG": 0.9766185150000638
+  },
+  "num_samples": 20,
+  "sample_source_counts": {
+    "curated": 5,
+    "medqa": 15
+  },
+  "judge": {
+    "provider": "ollama",
+    "model": "qwen3:14b"
+  }
+}

@@ -1,0 +1,539 @@
+import logging
+from typing import Optional
+
+import numpy as np
+
+from src.config import (
+    ENABLE_FEW_SHOT,
+    FILTERING_K,
+    LLM_MAX_TOKENS,
+    LLM_MODEL,
+    LLM_TEMPERATURE,
+    EMBEDDING_MODEL_NAME,
+    MAX_EVIDENCE_ITEMS,
+    MIN_PHI_SCORE,
+)
+
+logger = logging.getLogger(__name__)
+
+class HCADRetriever:
+    """End-to-end HCAD-RAG retrieval and generation pipeline."""
+
+    def __init__(
+        self,
+        graph=None,
+        collection=None,
+        model_name: Optional[str] = None,
+        k: float = FILTERING_K,
+    ):
+        self._graph = graph
+        self._collection = collection
+        self.model_name = model_name
+        self.k = k
+
+        self._ner: Optional[object] = None
+        self._relation_extractor: Optional[object] = None
+        self._decoupler: Optional[object] = None
+        self._transformer: Optional[object] = None
+        self._hypergraph: Optional[object] = None
+        self._filter: Optional[object] = None
+        self._prompt_builder: Optional[object] = None
+        self._entity_linker: Optional[object] = None
+        self._learned_weights: Optional[dict] = None
+        self._node_lookup: Optional[dict] = None
+        self._decision_gate: Optional[object] = None
+        self._entity_res_cache: dict[str, Optional[str]] = {}
+
+    def _load_components(self):
+        """Initialize components on first access."""
+        from src.core.ner_extractor import BiomedicalNER, SimpleNER
+        from src.core.relation_extractor import RelationExtractor
+        from src.core.semantic_decoupler import SemanticDecoupler
+        from src.core.anisotropic_transformer import AnisotropicTransformer
+        from src.core.hypergraph_builder import HypergraphBuilder
+        from src.core.statistical_filter import StatisticalFilter
+        from src.core.prompt_builder import PromptBuilder
+        from src.core.decision_gate import DecisionGate
+
+        logger.info("Initializing HCAD-RAG components...")
+
+        try:
+            self._ner = BiomedicalNER()
+        except Exception as e:
+            logger.warning(f"BiomedicalNER unavailable ({e}), using SimpleNER fallback.")
+            self._ner = SimpleNER()
+
+        self._relation_extractor = RelationExtractor()
+        self._decoupler = SemanticDecoupler()
+        self._transformer = AnisotropicTransformer()
+
+        # Hypergraph is lazily constructed via self.hypergraph
+        self._filter = StatisticalFilter(k=self.k)
+        self._prompt_builder = PromptBuilder()
+        self._decision_gate = DecisionGate(
+            min_relevance_score=0.25, max_evidence_items=MAX_EVIDENCE_ITEMS
+        )
+
+        try:
+            from src.core.entity_linker import SapBERTLinker
+            self._entity_linker = SapBERTLinker()
+            self._entity_linker.build_index(self.graph)
+        except Exception as e:
+            logger.debug(f"Entity linker not initialized: {e}")
+            self._entity_linker = None
+
+        # Audit/paper-parity: n-ary fact index from PrimeKG shared-tail
+        # contexts (base-paper Sec. 3.2 high-order correlations, but curated).
+        try:
+            from src.core.fact_hypergraph import build_fact_index_from_kg
+            self._fact_index = build_fact_index_from_kg(self.graph)
+            logger.info("N-ary fact index: %d clinical facts.", len(self._fact_index.facts))
+        except Exception as e:
+            logger.debug(f"Fact index unavailable: {e}")
+            self._fact_index = None
+
+        try:
+            from src.core.weight_learner import load_learned_weights
+            self._learned_weights = load_learned_weights()
+            if self._learned_weights and "filter_k" in self._learned_weights:
+                self._filter = StatisticalFilter(k=self._learned_weights["filter_k"])
+        except Exception:
+            self._learned_weights = None
+
+    @property
+    def graph(self):
+        if self._graph is None:
+            from src.data.build_knowledge_graph import load_knowledge_graph
+            self._graph = load_knowledge_graph()
+        return self._graph
+
+    @property
+    def hypergraph(self):
+        if self._hypergraph is None:
+            from src.core.hypergraph_builder import HypergraphBuilder
+            raw_graph = getattr(self.graph, "graph", self.graph)
+            if raw_graph is not None:
+                if hasattr(self.graph, "name_to_node") and not hasattr(raw_graph, "name_to_node"):
+                    try:
+                        raw_graph.name_to_node = self.graph.name_to_node
+                    except Exception:
+                        pass
+                self._hypergraph = HypergraphBuilder(raw_graph)
+        return self._hypergraph
+
+    @property
+    def collection(self):
+        if self._collection is None:
+            from src.data.build_vector_store import load_vector_store
+            self._collection = load_vector_store()
+        return self._collection
+
+    def _ensure_components(self):
+        if self._ner is None:
+            self._load_components()
+
+    # Entity Resolution
+
+    def _resolve_entity_in_graph(self, entity_name: str) -> Optional[str]:
+        """Resolve an entity name to a canonical PrimeKG node name with in-memory caching."""
+        if entity_name in self._entity_res_cache:
+            return self._entity_res_cache[entity_name]
+
+        # Try SapBERT first
+        if self._entity_linker is not None:
+            try:
+                matches = self._entity_linker.link(entity_name, top_k=1, threshold=0.50)
+                if matches:
+                    canonical = matches[0]["canonical_name"]
+                    score = matches[0]["score"]
+                    logger.debug(
+                        f"SapBERT linked '{entity_name}' → '{canonical}' (score={score:.3f})"
+                    )
+                    self._entity_res_cache[entity_name] = canonical
+                    return canonical
+            except Exception as e:
+                logger.warning(f"SapBERT linking failed for '{entity_name}': {e}")
+
+        # Fallback: string matching
+        res = self._find_entity_in_graph(entity_name)
+        # Cache the result, but ensure we don't cache None for empty strings
+        if res is None and entity_name and entity_name.strip():
+            # Try case-insensitive fallback
+            res = self._find_entity_in_graph(entity_name.lower())
+        self._entity_res_cache[entity_name] = res
+        return res
+
+    def _find_entity_in_graph(self, entity_name: str) -> Optional[str]:
+        """Find the best matching node name in the graph (fast O(1) hash lookup)."""
+        if not entity_name or not isinstance(entity_name, str):
+            return None
+
+        try:
+            if hasattr(self.graph, "get_node_by_name"):
+                try:
+                    result = self.graph.get_node_by_name(entity_name)
+                    if result:
+                        return entity_name
+                except KeyError:
+                    pass
+
+            graph_obj = getattr(self.graph, "graph", self.graph)
+            if graph_obj is None:
+                return None
+
+            if entity_name in graph_obj:
+                return entity_name
+
+            # Build lazy lowercase lookup index once
+            if self._node_lookup is None:
+                logger.info("Building fast O(1) PrimeKG node name hash index...")
+                name_to_node = getattr(self.graph, "name_to_node", {})
+                if name_to_node:
+                    self._node_lookup = {k.lower(): k for k in name_to_node.keys()}
+                else:
+                    # Fallback: extract names from node attributes
+                    if graph_obj is not None and hasattr(graph_obj, "nodes"):
+                        self._node_lookup = {
+                            str(graph_obj.nodes[n].get("name", "")).lower(): str(graph_obj.nodes[n].get("name", ""))
+                            for n in graph_obj.nodes
+                            if graph_obj.nodes[n].get("name")
+                        }
+                if self._node_lookup is None:
+                    self._node_lookup = {}
+                logger.info(f"Node name hash index ready with {len(self._node_lookup)} entries.")
+
+            entity_lower = entity_name.lower()
+            if self._node_lookup and entity_lower in self._node_lookup:
+                return self._node_lookup[entity_lower]
+
+        except Exception as e:
+            logger.debug(f"Entity lookup failed for '{entity_name}': {e}")
+
+        return None
+
+    def _get_candidate_contexts(
+        self, query: str, entities: dict, n_vector: int = 30
+    ) -> list[dict]:
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        candidates = []
+        seen_docs = set()
+
+        try:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            emb_model = (
+                self._decoupler._model
+                if hasattr(self, "_decoupler")
+                and self._decoupler
+                and hasattr(self._decoupler, "_model")
+                and self._decoupler._model
+                else SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
+            )
+            # Chroma's collection uses cosine distance. Keep the query vector
+            # on the same unit-normalized scale as the indexed vectors.
+            q_emb = emb_model.encode(
+                [query], convert_to_numpy=True, normalize_embeddings=True
+            ).tolist()
+            results = self.collection.query(
+                query_embeddings=q_emb, n_results=n_vector
+            )
+            documents = (results.get("documents") or [[]])[0] or []
+            metadatas = (results.get("metadatas") or [[]])[0] or []
+            distances = (results.get("distances") or [[]])[0] or []
+            for i, doc in enumerate(documents):
+                if doc not in seen_docs:
+                    candidates.append(
+                        {
+                            "document": doc,
+                            "metadata": metadatas[i] if i < len(metadatas) else {},
+                            "score": 1.0 - distances[i] if i < len(distances) else 0.0,
+                            "source": "vector",
+                        }
+                    )
+                    seen_docs.add(doc)
+        except Exception as e:
+            logger.warning(f"Vector store retrieval failed: {e}")
+
+        if self.hypergraph is not None:
+            all_entity_names = []
+            for ent_list in entities.values():
+                for ent in ent_list:
+                    all_entity_names.append(ent["text"])
+
+            # Map entity names to graph node IDs using name_to_node
+            name_to_node = getattr(self.graph, "name_to_node", {})
+            graph_nx = getattr(self.graph, "graph", self.graph)
+
+            # Handle case where graph or its attributes are None
+            if name_to_node is None:
+                name_to_node = {}
+            if graph_nx is None or not hasattr(graph_nx, "nodes"):
+                import networkx as nx
+                graph_nx = nx.MultiDiGraph()
+
+            # rank entities by NER salience before the
+            # arbitrary [:5] cap, so truncation is deterministic.
+            all_entity_names = list(dict.fromkeys(all_entity_names))[:5]
+            for entity_name in all_entity_names:
+                matched_name = self._resolve_entity_in_graph(entity_name)
+                if not matched_name:
+                    continue
+
+                node_id = name_to_node.get(matched_name, matched_name)
+                if node_id is None or node_id not in graph_nx:
+                    continue
+
+                try:
+                    hyperedges = self.hypergraph.build_hyperedges(node_id)
+                    if hyperedges:
+                        # sort by importance BEFORE capping.
+                        hyperedges = sorted(hyperedges, key=lambda h: h["importance"], reverse=True)
+                        max_importance = max(he["importance"] for he in hyperedges) or 1.0
+                        for he in hyperedges[:5]:
+                            he_nodes = he["nodes"][:10]
+                            he_triples = self.hypergraph.get_triples_for_entities(he_nodes)
+                            norm_importance = he["importance"] / max_importance
+                            for u, relation, v in he_triples[:10]:
+                                head_name = graph_nx.nodes[u].get("name", str(u)) if u in graph_nx else str(u)
+                                tail_name = graph_nx.nodes[v].get("name", str(v)) if v in graph_nx else str(v)
+                                doc = f"{head_name} {relation.replace('_', ' ')} {tail_name}."
+                                if doc not in seen_docs:
+                                    candidates.append(
+                                        {
+                                            "document": doc,
+                                            "metadata": {
+                                                "head_name": head_name,
+                                                "tail_name": tail_name,
+                                                "relation": relation,
+                                                "display_relation": relation,
+                                                "head_type": graph_nx.nodes.get(u, {}).get("node_type", "unknown"),
+                                                "tail_type": graph_nx.nodes.get(v, {}).get("node_type", "unknown"),
+                                            },
+                                            "score": 0.5 * norm_importance,
+                                            "source": "graph_hyperedge",
+                                        }
+                                    )
+                                    seen_docs.add(doc)
+                except Exception as e:
+                    logger.debug(f"Hyperedge expansion failed for '{matched_name}': {e}")
+                    try:
+                        triples = self.hypergraph.get_triples_for_entities([node_id])
+                        for u, relation, v in triples[:20]:
+                            head_name = graph_nx.nodes[u].get("name", str(u)) if u in graph_nx else str(u)
+                            tail_name = graph_nx.nodes[v].get("name", str(v)) if v in graph_nx else str(v)
+                            doc = f"{head_name} {relation.replace('_', ' ')} {tail_name}."
+                            if doc not in seen_docs:
+                                candidates.append(
+                                    {
+                                        "document": doc,
+                                        "metadata": {
+                                            "head_name": head_name,
+                                            "tail_name": tail_name,
+                                            "relation": relation,
+                                            "display_relation": relation,
+                                            "head_type": graph_nx.nodes.get(u, {}).get("node_type", "unknown"),
+                                            "tail_type": graph_nx.nodes.get(v, {}).get("node_type", "unknown"),
+                                        },
+                                        "score": 0.5,
+                                        "source": "graph",
+                                    }
+                                )
+                                seen_docs.add(doc)
+                    except Exception:
+                        pass
+
+        # Paper-parity (Sec. 3.4): correlation-keyword retrieval against
+        # hyperedges/facts, in addition to entity->vertex retrieval. The
+        # relation keywords extracted from the query act as X_cor.
+        if getattr(self, "_fact_index", None) is not None:
+            rel_keywords = self._relation_extractor.extract_keywords(query) \
+                if hasattr(self._relation_extractor, "extract_keywords") else []
+            anchors = set()
+            for ent_list in entities.values():
+                for ent in ent_list:
+                    if isinstance(ent, dict) and ent.get("text"):
+                        anchors.add(ent["text"].lower())
+            if rel_keywords or anchors:
+                facts = self._fact_index.retrieve(anchors, top_k=12)
+                for f in facts:
+                    doc = self._fact_index.render(f)
+                    if doc not in seen_docs:
+                        members = sorted(set(f.roles.values()))
+                        candidates.append({
+                            "document": doc,
+                            "metadata": {
+                                "head_name": members[0] if members else "",
+                                "tail_name": f.roles.get("anchor", ""),
+                                "relation": f.predicate,
+                                "display_relation": f.predicate,
+                                "fact_arity": len(f.roles),
+                                "provenance": f.source_id,
+                            },
+                            "score": 0.5 * f.confidence,
+                            "source": "nary_fact",
+                        })
+                        seen_docs.add(doc)
+
+        return candidates[:60]
+
+    def retrieve(
+        self,
+        query: str,
+        k: Optional[float] = None,
+        n_candidates: int = 30,
+    ) -> list[dict]:
+        """Retrieve and rank candidate contexts using decoupled structural similarity and adaptive filtering."""
+        self._ensure_components()
+        k = k if k is not None else self.k
+
+        entities = self._ner.extract_entities(query)
+        relations = self._relation_extractor.extract_rules(query, entities)
+
+        Q = self._decoupler.decouple(
+            query, entities=entities, relations=relations
+        )
+
+        all_entity_names = [
+            e.get("text", "") for ents in entities.values() for e in ents if isinstance(e, dict)
+        ]
+        # Filter out empty strings and ensure we have valid entity names
+        all_entity_names = [name for name in all_entity_names if name and isinstance(name, str)]
+        primary_entity = all_entity_names[0] if all_entity_names else ""
+        weights = self._transformer.compute_weights(self.graph, primary_entity)
+
+        candidates = self._get_candidate_contexts(
+            query, entities, n_vector=n_candidates
+        )
+        if not candidates:
+            return []
+
+        # Vectorized batch decoupling of all candidates in a single tensor operation
+        candidate_docs = []
+        entities_list = []
+        relations_list = []
+        for ctx in candidates:
+            ctx_doc = ctx.get("document", "")
+            ctx_meta = ctx.get("metadata") or {}
+            ctx_entity = ctx_meta.get("head_name", "")
+            ctx_relation = (ctx_meta.get("relation") or "").replace("_", " ").lower()
+            ctx_tail = ctx_meta.get("tail_name", "")
+
+            candidate_docs.append(ctx_doc)
+            ctx_entities_dict = None
+            ctx_relations_list = None
+            if ctx_entity:
+                ctx_entities_dict = {"Entity": [
+                    {"text": ctx_entity, "start": 0, "end": len(ctx_entity)},
+                ]}
+                if ctx_tail:
+                    ctx_entities_dict["Entity"].append(
+                        {"text": ctx_tail, "start": len(ctx_entity)+1,
+                         "end": len(ctx_entity)+1+len(ctx_tail)}
+                    )
+            if ctx_relation:
+                ctx_relations_list = [{"relation": ctx_relation}]
+
+            entities_list.append(ctx_entities_dict)
+            relations_list.append(ctx_relations_list)
+
+        C_batch = self._decoupler.decouple_batch(
+            candidate_docs,
+            entities_list=entities_list,
+            relations_list=relations_list,
+            as_numpy=True,
+        )
+        phi_scores = self._transformer.compute_batch_component_similarities(
+            Q, C_batch, weights
+        )
+
+        filtered = self._filter.filter_contexts(
+            candidates,
+            np.asarray(phi_scores),
+            k=k,
+            max_top_k=MAX_EVIDENCE_ITEMS,
+        )
+
+        # the previous "Fix #2" re-admitted candidates
+        # BELOW the absolute floor Phi_min = 0.10 whenever both gates rejected
+        # everything - defeating Gate 1 exactly on out-of-domain queries.
+        # Correct behavior: abstain (empty context) so the generator relies on
+        # parametric knowledge rather than being distracted by noise.
+        if not filtered:
+            logger.warning(
+                "All %d candidates rejected by dual-gating (floor %.2f). "
+                "Abstaining from retrieval - parametric mode.",
+                len(candidates), MIN_PHI_SCORE,
+            )
+            return []
+
+        # JEV-inspired Decision Gate: Verify relevance & prune token bloat
+        if self._decision_gate is not None:
+            filtered = self._decision_gate.verify_and_prune_candidates(filtered, query)
+
+        return filtered
+
+    def retrieve_and_generate(
+        self,
+        query: str,
+        k: Optional[float] = None,
+        model: Optional[str] = None,
+        contexts: Optional[list[dict]] = None,
+    ) -> str:
+        from src.core.llm_client import UnifiedLLMClient
+
+        self._ensure_components()
+        model = model or self.model_name
+        if contexts is None:
+            contexts = self.retrieve(query, k=k)
+        messages = self._prompt_builder.build_rag_prompt(query, contexts)
+
+        try:
+            client = UnifiedLLMClient(model=model, temperature=LLM_TEMPERATURE, max_tokens=LLM_MAX_TOKENS)
+            return client.chat(messages)
+        except Exception as e:
+            logger.error(f"Generation failed: {e}")
+            return f"[Error: LLM generation failed - {e}]"
+
+    def answer_mcq(
+        self,
+        question: str,
+        options: dict,
+        k: Optional[float] = None,
+        model: Optional[str] = None,
+        n_samples: int = 1,
+    ) -> tuple[str, str]:
+        """Answer a multiple-choice question using retrieved context."""
+        from collections import Counter
+        from src.core.llm_client import UnifiedLLMClient
+        from src.baselines.baseline_llm import extract_answer_letter
+
+        self._ensure_components()
+        model = model or self.model_name
+        contexts = self.retrieve(question, k=k)
+        messages = self._prompt_builder.build_mcq_prompt(
+            question, options, contexts=contexts, few_shot=ENABLE_FEW_SHOT,
+        )
+
+        try:
+            client = UnifiedLLMClient(model=model, temperature=LLM_TEMPERATURE, max_tokens=512)
+            if n_samples > 1:
+                votes = []
+                responses = []
+                for i in range(n_samples):
+                    text = client.chat(messages, temperature=0.3, max_tokens=768)
+                    letter = extract_answer_letter(text)
+                    votes.append(letter)
+                    responses.append(f"Sample {i+1} ({letter}):\n{text}")
+
+                # deterministic tie-break - first sample wins.
+                counts = Counter(votes)
+                majority_vote = max(votes, key=lambda v: (counts[v], -votes.index(v)))
+                full_response = "\n\n".join(responses)
+                return majority_vote, full_response
+
+            full_response = client.chat(messages)
+            return extract_answer_letter(full_response), full_response
+        except Exception as e:
+            logger.error(f"MCQ answer failed: {e}")
+            return "X", f"[Error: {e}]"

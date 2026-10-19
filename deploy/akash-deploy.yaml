@@ -1,0 +1,52 @@
+# Akash SDL — 1x NVIDIA A100.
+# Easiest path: import this file at https://console.akash.network and pick
+# "A100" in the GPU filter; the console rewrites the provider attribute
+# filters for you. Bids come from datacenter providers, not home nodes.
+---
+version: "2.0"
+services:
+  hcad:
+    image: docker.io/<your-dockerhub-user>/hcad-rag:a100
+    expose:
+      - port: 22
+        as: 22
+        to:
+          all: true
+    env:
+      SSH_PUBKEY: "ssh-ed25519 AAAA...your-key..."
+      WANDB_MODE: "disabled"
+    params:
+      storage:
+        data:
+          mount: /data
+          readOnly: false
+    command: ["/start.sh"]
+
+profiles:
+  compute:
+    hcad:
+      resources:
+        gpu:
+          units: 1
+          attributes:
+            vendor: nvidia
+        cpu:
+          units: 16
+        memory:
+          size: 64 Gi
+        storage:
+          size: 400 Gi
+  placement:
+    default:
+      attributes:
+        host: akash
+      pricing:
+        hcad:
+          denom: uakt
+          amount: 400000
+
+deployment:
+  hcad:
+    hcad:
+      profile: hcad
+      count: 1
