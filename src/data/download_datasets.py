@@ -3,8 +3,7 @@ Download and prepare all datasets for the HCAD-RAG pipeline.
 
 Datasets :
   1. PrimeKG  - Biomedical knowledge graph (Harvard Dataverse, ~3 GB CSV).
-  2. MedQA    - USMLE-style multiple-choice questions (HuggingFace Hub).
-  3. MedHallu - Medical hallucination benchmark with labeled & artificial splits.
+  2. MedHallu - Medical hallucination benchmark with labeled & artificial splits.
 
 Usage:
     python -m src.data.download_datasets          # download everything

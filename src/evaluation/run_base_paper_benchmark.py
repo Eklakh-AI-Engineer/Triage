@@ -10,12 +10,15 @@ Outputs:
 - 5-Dimension Scoring-Based Assessment (0-100)
 - 8-Criteria Selection-Based Win-Rate (%)
 - Retrieval Latency Benchmark (seconds)
+- Robustness metrics (src/evaluation/metrics.py):
+  - NDCG@K / Recall@K over paper-protocol gold relevance labels
+  - McNemar exact significance test on paired correctness
+  - Citation precision of [Evidence i] tags against retrieved items
 """
 
 import json
 import logging
-import os
-import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -25,8 +28,9 @@ from typing import Any, Dict, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import EVIDENCE_WORD_BUDGET, RANDOM_SEED, RESULTS_DIR, RAW_DATA_DIR
+from src.config import EVIDENCE_WORD_BUDGET, RANDOM_SEED, RESULTS_DIR
 from src.evaluation.base_paper_evaluator import BasePaperEvaluator
+from src.evaluation.metrics import citation_precision, mcnemar_test, ndcg_at_k, recall_at_k
 from src.wandb_tracking import log_base_paper_results, tracked_run
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -95,8 +99,6 @@ def load_clinical_benchmark_samples(num_samples: int = 5) -> List[Dict[str, str]
     # heterogeneous. Oversize requests are truncated to the curated pool.
     return clinical_cases[:num_samples]
 
-    return clinical_cases
-
 def _merge_selection_results(ab_result: Dict, ba_result: Dict, target_label: str) -> Dict:
     """Merge AB and BA pairwise evaluations to counterbalance position bias."""
     merged_criteria = {}
@@ -163,6 +165,140 @@ def _format_retrieved_evidence(contexts: List[Dict[str, Any]], tag: str) -> str:
         if used < len(words):
             break
     return "\n".join(lines) or "Retrieved contexts contained no readable evidence."
+
+# Both systems retrieve top-5; all retrieval metrics use the same cut.
+RETRIEVAL_K = 5
+# Paired correctness threshold for McNemar: overall_score >= 70 of 100.
+CORRECTNESS_THRESHOLD = 70.0
+
+_STOPWORDS = frozenset(
+    "the a an and or of to in for with on by is are was were be been this that "
+    "these those it its as at from may can which who whom what when where how "
+    "not no than then also such into during before after above below over under "
+    "between within without about against each other more most less least any "
+    "all some both few many much very own same so if while because through "
+    "their there here they them we you he she his her our your my me us him".split()
+)
+
+def _context_document(context: Dict[str, Any]) -> str:
+    """Readable text of a retrieved context (mirrors the evidence formatter)."""
+    document = context.get("document") or context.get("text") or ""
+    if not document:
+        metadata = context.get("metadata") or {}
+        head = metadata.get("head_name", "")
+        relation = metadata.get("display_relation") or metadata.get("relation", "")
+        tail = metadata.get("tail_name", "")
+        document = f"{head} {relation} {tail}".strip()
+    return str(document)
+
+def _content_tokens(text: str) -> set:
+    """Lowercased content tokens; stop- and short tokens dropped."""
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(token) >= 3 and token not in _STOPWORDS
+    }
+
+def _ranked_relevance(
+    reference: str,
+    contexts: List[Dict[str, Any]],
+    overlap_threshold: float = 0.3,
+) -> List[int]:
+    """Binary relevance of retrieved contexts against the gold source chunk.
+
+    The paper protocol generates each question FROM a source chunk, so that
+    chunk is the free gold relevance label. A retrieved context is relevant
+    when its content-token Jaccard overlap with the reference reaches the
+    threshold (1.0 for the chunk itself; paraphrases stay well above it
+    while short fragments sharing a word or two do not).
+    """
+    ref_tokens = _content_tokens(reference)
+    relevance: List[int] = []
+    if not ref_tokens:
+        return [0] * len(contexts)
+    for context in contexts:
+        doc_tokens = _content_tokens(_context_document(context))
+        union = len(ref_tokens | doc_tokens)
+        overlap = len(ref_tokens & doc_tokens) / union if union else 0.0
+        relevance.append(1 if overlap >= overlap_threshold else 0)
+    return relevance
+
+def _records_from_checkpoint(
+    checkpoint_path: Path, sample_questions: set
+) -> Dict[str, Any]:
+    """Load the newest per-question record for every question in this run.
+
+    Aggregating from the checkpoint (not session memory) keeps resumed runs
+    correct: questions evaluated before the interruption keep their records,
+    and stale questions from older runs with different sample sets are
+    filtered out.
+    """
+    by_question: Dict[str, Dict[str, Any]] = {}
+    if checkpoint_path.exists():
+        with open(checkpoint_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("question") in sample_questions:
+                    by_question[record["question"]] = record  # later lines win
+
+    scoring = {"Baseline LLM": [], "Vanilla RAG": [], "HCAD-RAG": []}
+    selection = {"HCAD_vs_Vanilla": [], "HCAD_vs_Baseline": []}
+    latency = {"Vanilla RAG": [], "HCAD-RAG": []}
+    retrieval = {"Vanilla RAG": [], "HCAD-RAG": []}
+    citations = {"Vanilla RAG": [], "HCAD-RAG": []}
+    scoring_by_tier: Dict[int, Dict[str, List[Dict[str, Any]]]] = {}
+    scoring_by_source: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+    selection_by_source: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+    for record in by_question.values():
+        scores = record.get("scores") or {}
+        for system, score in scores.items():
+            if system in scoring:
+                scoring[system].append(score)
+                tier_records = scoring_by_tier.setdefault(
+                    int(record.get("difficulty_tier", 1) or 1),
+                    {sys: [] for sys in scoring},
+                )
+                tier_records[system].append(score)
+                source_records = scoring_by_source.setdefault(
+                    record.get("source", "curated"),
+                    {sys: [] for sys in scoring},
+                )
+                source_records[system].append(score)
+        for comparison, sel in (record.get("selection") or {}).items():
+            if comparison in selection:
+                selection[comparison].append(sel)
+                sel_source = selection_by_source.setdefault(
+                    record.get("source", "curated"),
+                    {comparison: [] for comparison in selection},
+                )
+                sel_source[comparison].append(sel)
+        for system, lat in (record.get("latency") or {}).items():
+            if system in latency:
+                latency[system].append(lat)
+        for system, ret in (record.get("retrieval") or {}).items():
+            if system in retrieval and ret:
+                retrieval[system].append(ret)
+        for system, cit in (record.get("citations") or {}).items():
+            if system in citations:
+                citations[system].append(cit)
+
+    return {
+        "scoring": scoring,
+        "selection": selection,
+        "latency": latency,
+        "retrieval": retrieval,
+        "citations": citations,
+        "scoring_by_tier": scoring_by_tier,
+        "scoring_by_source": scoring_by_source,
+        "selection_by_source": selection_by_source,
+        "per_question": list(by_question.values()),
+    }
 
 QUESTION_GEN_PROMPT = (
     "You are given a passage from a clinical knowledge base. Generate one "
@@ -257,24 +393,10 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         samples = load_clinical_benchmark_samples(num_samples)
     logger.info(f"Loaded {len(samples)} clinical test cases.")
 
-    scoring_by_tier: dict[int, dict] = {}
-    scoring_records = {
-        "Baseline LLM": [],
-        "Vanilla RAG": [],
-        "HCAD-RAG": [],
-    }
-    scoring_records_by_source = {}
-
-    selection_records = {
-        "HCAD_vs_Vanilla": [],
-        "HCAD_vs_Baseline": [],
-    }
-    selection_records_by_source = {}
-
-    latency_records = {
-        "Vanilla RAG": [],
-        "HCAD-RAG": [],
-    }
+    # Per-sample results are appended to the checkpoint and all aggregation
+    # reads back from it (see _records_from_checkpoint) - resumed runs
+    # therefore aggregate over the complete sample set, not just the
+    # questions evaluated in the current session.
 
     checkpoint_path = RESULTS_DIR / "base_paper_checkpoint.jsonl"
     completed_questions = set()
@@ -302,7 +424,6 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         t0 = time.perf_counter()
         vanilla_contexts = vanilla_rag.retrieve(q, top_k=5)
         t_vanilla_ret = time.perf_counter() - t0
-        latency_records["Vanilla RAG"].append(t_vanilla_ret)
         resp_vanilla = _validate_generated_response(
             "Vanilla RAG", vanilla_rag.retrieve_and_generate(q, contexts=vanilla_contexts)
         )
@@ -313,7 +434,6 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         t0 = time.perf_counter()
         hcad_contexts = hcad_rag.retrieve(q)
         t_hcad_ret = time.perf_counter() - t0
-        latency_records["HCAD-RAG"].append(t_hcad_ret)
         logger.info("  HCAD-RAG retrieved %d contexts in %.1fs", len(hcad_contexts), t_hcad_ret)
         resp_hcad = _validate_generated_response(
             "HCAD-RAG", hcad_rag.retrieve_and_generate(q, contexts=hcad_contexts)
@@ -332,20 +452,30 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         logger.info("  Scores - Baseline: %.1f, Vanilla: %.1f, HCAD: %.1f",
                      score_base.overall_score, score_van.overall_score, score_hcad.overall_score)
 
-        scoring_records["Baseline LLM"].append(score_base.to_dict())
-        scoring_records["Vanilla RAG"].append(score_van.to_dict())
-        scoring_records["HCAD-RAG"].append(score_hcad.to_dict())
-        source = sample.get("source", "curated")
-        tier = int(sample.get("difficulty_tier", 1) or 1)
-        tier_records = scoring_by_tier.setdefault(tier, {s_: [] for s_ in scoring_records})
-        source_records = scoring_records_by_source.setdefault(
-            source, {system: [] for system in scoring_records}
-        )
-        source_records["Baseline LLM"].append(score_base.to_dict())
-        source_records["Vanilla RAG"].append(score_van.to_dict())
-        source_records["HCAD-RAG"].append(score_hcad.to_dict())
-        for s_, rec in (("Baseline LLM", score_base), ("Vanilla RAG", score_van), ("HCAD-RAG", score_hcad)):
-            tier_records[s_].append(rec.to_dict())
+        # Robustness metrics (src/evaluation/metrics.py). Retrieval quality
+        # needs gold relevance labels, which the paper protocol provides for
+        # free: the source chunk that generated the question. Curated-fallback
+        # samples have no retrieval gold and are excluded from NDCG/Recall.
+        sample_retrieval: Dict[str, Dict[str, float]] = {}
+        if sample.get("source") == "paper_protocol":
+            for system, contexts in (
+                ("Vanilla RAG", vanilla_contexts),
+                ("HCAD-RAG", hcad_contexts),
+            ):
+                relevance = _ranked_relevance(ref, contexts)
+                sample_retrieval[system] = {
+                    "ndcg_at_k": round(ndcg_at_k(relevance, k=RETRIEVAL_K), 4),
+                    "recall_at_k": round(recall_at_k(relevance, k=RETRIEVAL_K), 4),
+                }
+
+        sample_citations: Dict[str, Dict[str, Any]] = {}
+        for system, response, contexts in (
+            ("Vanilla RAG", resp_vanilla, vanilla_contexts),
+            ("HCAD-RAG", resp_hcad, hcad_contexts),
+        ):
+            sample_citations[system] = citation_precision(
+                response, [_context_document(c) for c in contexts]
+            )
 
         # 3. Selection-Based Assessment (with order counterbalancing)
         # Run AB order
@@ -377,8 +507,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
 
         logger.info("  Selection - HCAD vs Vanilla: %s, HCAD vs Baseline: %s",
                      sel_van.get("overall_winner"), sel_base.get("overall_winner"))
-        selection_records["HCAD_vs_Vanilla"].append(sel_van)
-        selection_records["HCAD_vs_Baseline"].append(sel_base)
+
         # per-sample checkpoint with full provenance
         with open(checkpoint_path, "a", encoding="utf-8") as ckpt:
             ckpt.write(json.dumps({
@@ -386,47 +515,51 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
                 "source": sample.get("source", "curated"),
                 "difficulty_tier": sample.get("difficulty_tier", 1),
                 "scores": {
-                    sys_name: recs[-1]
-                    for sys_name, recs in scoring_records.items()
+                    "Baseline LLM": score_base.to_dict(),
+                    "Vanilla RAG": score_van.to_dict(),
+                    "HCAD-RAG": score_hcad.to_dict(),
                 },
                 "selection": {
                     "HCAD_vs_Vanilla": sel_van,
                     "HCAD_vs_Baseline": sel_base,
                 },
                 "latency": {
-                    "Vanilla RAG": latency_records["Vanilla RAG"][-1],
-                    "HCAD-RAG": latency_records["HCAD-RAG"][-1],
+                    "Vanilla RAG": t_vanilla_ret,
+                    "HCAD-RAG": t_hcad_ret,
                 },
+                "retrieval": sample_retrieval,
+                "citations": sample_citations,
             }) + "\n")
-        source_selection = selection_records_by_source.setdefault(
-            source, {comparison: [] for comparison in selection_records}
-        )
-        source_selection["HCAD_vs_Vanilla"].append(sel_van)
-        source_selection["HCAD_vs_Baseline"].append(sel_base)
+
+    # Aggregate from the checkpoint so resumed runs include previously
+    # evaluated questions of this sample set.
+    records = _records_from_checkpoint(
+        checkpoint_path, {s["question"] for s in samples}
+    )
 
     # Compute aggregate statistics
-    def calc_mean_scores(records: List[Dict[str, Any]]) -> Dict[str, float]:
-        if not records:
+    def calc_mean_scores(score_records: List[Dict[str, Any]]) -> Dict[str, float]:
+        if not score_records:
             return {}
         dims = ["comprehensiveness", "diversity", "empowerment", "logical", "readability", "overall_score"]
-        return {dim: sum(r[dim] for r in records) / len(records) for dim in dims}
+        return {dim: sum(r[dim] for r in score_records) / len(score_records) for dim in dims}
 
-    final_scores = {sys_name: calc_mean_scores(recs) for sys_name, recs in scoring_records.items()}
+    final_scores = {sys_name: calc_mean_scores(recs) for sys_name, recs in records["scoring"].items()}
     scores_by_source = {
-        source: {sys_name: calc_mean_scores(recs) for sys_name, recs in records.items()}
-        for source, records in scoring_records_by_source.items()
+        source: {sys_name: calc_mean_scores(recs) for sys_name, recs in source_records.items()}
+        for source, source_records in records["scoring_by_source"].items()
     }
 
     # Compute Win-Rates
-    def calc_win_rate(records: List[Dict[str, Any]], target_label: str = "HCAD-RAG") -> Dict[str, Any]:
-        if not records:
+    def calc_win_rate(win_records: List[Dict[str, Any]], target_label: str = "HCAD-RAG") -> Dict[str, Any]:
+        if not win_records:
             return {}
-        total = len(records)
-        overall_wins = sum(1 for r in records if r["overall_winner"] == target_label)
-        ties = sum(1 for r in records if r.get("overall_winner") == "Tie")
+        total = len(win_records)
+        overall_wins = sum(1 for r in win_records if r["overall_winner"] == target_label)
+        ties = sum(1 for r in win_records if r.get("overall_winner") == "Tie")
         losses = total - overall_wins - ties
         criteria_wins = {c: 0 for c in BasePaperEvaluator.CRITERIA_LIST}
-        for r in records:
+        for r in win_records:
             cw = r.get("criteria_winners", {})
             for c in BasePaperEvaluator.CRITERIA_LIST:
                 if cw.get(c) == target_label:
@@ -443,21 +576,77 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         }
 
     final_win_rates = {
-        "HCAD_vs_Vanilla": calc_win_rate(selection_records["HCAD_vs_Vanilla"], "HCAD-RAG"),
-        "HCAD_vs_Baseline": calc_win_rate(selection_records["HCAD_vs_Baseline"], "HCAD-RAG"),
+        comparison: calc_win_rate(recs, "HCAD-RAG")
+        for comparison, recs in records["selection"].items()
     }
     win_rates_by_source = {
         source: {
-            comparison: calc_win_rate(records, "HCAD-RAG")
-            for comparison, records in comparisons.items()
+            comparison: calc_win_rate(recs, "HCAD-RAG")
+            for comparison, recs in comparisons.items()
         }
-        for source, comparisons in selection_records_by_source.items()
+        for source, comparisons in records["selection_by_source"].items()
     }
 
     avg_latencies = {
         sys_name: sum(lats) / len(lats) if lats else 0.0
-        for sys_name, lats in latency_records.items()
+        for sys_name, lats in records["latency"].items()
     }
+
+    # Robustness metric 1+2: NDCG@K / Recall@K over paper-protocol samples.
+    retrieval_quality: Dict[str, Any] = {
+        "k": RETRIEVAL_K,
+        "n_samples": len(records["retrieval"]["HCAD-RAG"]),
+        "systems": {},
+    }
+    for system, ret_records in records["retrieval"].items():
+        retrieval_quality["systems"][system] = {
+            metric: (
+                round(sum(r[metric] for r in ret_records) / len(ret_records), 4)
+                if ret_records
+                else None
+            )
+            for metric in ("ndcg_at_k", "recall_at_k")
+        }
+
+    # Robustness metric 3: citation precision of generated answers.
+    citation_summary: Dict[str, Any] = {}
+    for system, cit_records in records["citations"].items():
+        precisions = [r["precision"] for r in cit_records if r.get("precision") is not None]
+        citation_summary[system] = {
+            "n_answers_with_citations": len(precisions),
+            "n_answers": len(cit_records),
+            "total_citations": sum(r.get("n_citations", 0) for r in cit_records),
+            "mean_precision": (
+                round(sum(precisions) / len(precisions), 4) if precisions else None
+            ),
+        }
+
+    # Robustness metric 4: exact McNemar test on paired per-question
+    # correctness (overall_score >= CORRECTNESS_THRESHOLD counts as correct).
+    per_question = records["per_question"]
+
+    def _correct_flags(system: str) -> List[bool]:
+        return [
+            (rec.get("scores", {}).get(system, {}).get("overall_score", 0.0) or 0.0)
+            >= CORRECTNESS_THRESHOLD
+            for rec in per_question
+        ]
+
+    significance_testing: Dict[str, Any] = {
+        "correctness_threshold": CORRECTNESS_THRESHOLD,
+        "n_paired_samples": len(per_question),
+    }
+    hcad_flags = _correct_flags("HCAD-RAG")
+    for comparison, other_system in (
+        ("HCAD_vs_Vanilla", "Vanilla RAG"),
+        ("HCAD_vs_Baseline", "Baseline LLM"),
+    ):
+        if hcad_flags:
+            significance_testing[comparison] = mcnemar_test(
+                hcad_flags, _correct_flags(other_system)
+            )
+        else:
+            significance_testing[comparison] = None
 
     summary_results = {
         "run_manifest": {  # provenance for every result file
@@ -471,12 +660,15 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         "scoring_by_difficulty_tier": {
             str(t): {s_: (sum(r["overall_score"] for r in recs) / len(recs) if recs else 0.0)
                      for s_, recs in sys_map.items()}
-            for t, sys_map in scoring_by_tier.items()
+            for t, sys_map in records["scoring_by_tier"].items()
         },
         "scoring_based_assessment_by_source": scores_by_source,
         "selection_based_assessment": final_win_rates,
         "selection_based_assessment_by_source": win_rates_by_source,
         "retrieval_latency_seconds": avg_latencies,
+        "retrieval_quality": retrieval_quality,
+        "citation_precision": citation_summary,
+        "significance_testing": significance_testing,
         "num_samples": len(samples),
         "sample_source_counts": {
             source: sum(1 for sample in samples if sample.get("source", "curated") == source)

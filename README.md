@@ -74,25 +74,24 @@ Use the repository-root `.env` as the single local environment file:
 ```bash
 HF_TOKEN="your_huggingface_token"
 TYPESAFE_API_KEY="your_typesafe_or_openrouter_api_key"  # Optional, enables live JEV System One gate
-LLM_PROVIDER="huggingface"                              # "huggingface" or "ollama"
+LLM_PROVIDER="huggingface"                              # "huggingface", "nvidia" (NIM), or "ollama"
 WANDB_API_KEY="your_rotated_wandb_api_key"              # Optional, enables experiment tracking
 WANDB_PROJECT="hcad-rag"
 # WANDB_ENTITY="your_wandb_username_or_team"            # Optional
 ```
 
 The root `.env` is git-ignored and is loaded centrally by `src.config`; add
-settings there rather than creating another environment file. A newly generated
-W&B API key is loaded automatically for each evaluation, benchmark,
-hallucination evaluation, and weight-learning run. Do not put API keys in source
-code or commit them. Since a W&B key was shared in chat, revoke it in W&B and
-replace it in `.env`. Set `WANDB_MODE="disabled"` to turn tracking off.
+settings there rather than creating another environment file. The W&B API key
+is loaded automatically for each evaluation, benchmark, hallucination
+evaluation, and weight-learning run. Do not put API keys in source code or
+commit them. Set `WANDB_MODE="disabled"` (or pass `--no-wandb`) to turn
+tracking off.
 
 ### 2. Prepare Knowledge Corpus & Indices
 
 ```bash
 # Build knowledge graph indices and vector database with clinical relations
-python src/data/build_knowledge_graph.py
-python src/data/build_vector_store.py
+python src/main.py prepare --rebuild
 ```
 
 ### 3. Run Benchmark (Base Paper Protocol)
@@ -108,8 +107,15 @@ Outputs:
 - **5-Dimension Scoring Assessment** (0–100 scale: Comprehensiveness, Diversity, Empowerment, Logical, Readability)
 - **8-Criteria Selection Assessment** (Pairwise Win-Rate with order counterbalancing)
 - **Retrieval Latency Profiling**
-- MedQA accuracy is reported with a 95% Wilson interval; benchmark system differences include paired bootstrap 95% intervals over the same sampled questions. Sampling uses a local seeded RNG, so it is reproducible without changing global random state.
-- W&B aggregate and per-question numeric MedQA metrics plus MedHallu scalar metrics when `WANDB_API_KEY` is configured. MedQA and MedHallu charts are not logged; base-paper scoring, selection, and latency comparison charts remain enabled. Logged MedQA sample tables omit question and response text.
+- **Retrieval Quality** (`src/evaluation/metrics.py`): NDCG@5 / Recall@5 over the paper-protocol gold relevance labels — the source chunk that generated each question
+- **Significance Testing**: exact McNemar test on paired per-question correctness (overall score ≥ 70 of 100 counts as correct)
+- **Citation Precision**: fraction of `[Evidence i]` tags in generated answers that resolve to actually retrieved items
+- **MedHallu hallucination evaluation** via `src/evaluation/hallucination_evaluator.py`
+
+Per-question results are checkpointed to `results/base_paper_checkpoint.jsonl`
+and all aggregates are recomputed from the checkpoint, so interrupted runs
+resume without losing or double-counting samples. W&B logs the aggregate and
+per-question numeric metrics when `WANDB_API_KEY` is configured.
 
 Weight learning tunes only `filter_k`, the learned parameter currently consumed by
 the retriever. Anisotropic and component-scoring weights remain at their configured
@@ -127,8 +133,9 @@ hcad-rag/
 ├── src/
 │   ├── config.py                      # Global configurations, model weights & paths
 │   ├── main.py                        # CLI entry point
+│   ├── wandb_tracking.py              # Shared W&B helpers (auto-enabled when configured)
 │   ├── data/
-│   │   ├── download_datasets.py       # Dataset fetchers (PrimeKG, MedQA, MedHallu)
+│   │   ├── download_datasets.py       # Dataset fetchers (PrimeKG, MedHallu)
 │   │   ├── build_knowledge_graph.py   # PrimeKG MultiDiGraph & index construction
 │   │   └── build_vector_store.py      # ChromaDB clinical context ingestion
 │   ├── core/
@@ -138,19 +145,25 @@ hcad-rag/
 │   │   ├── semantic_decoupler.py      # Innovation 1: Entity-Relation-Modifier decoupling
 │   │   ├── anisotropic_transformer.py # Innovation 2: Graph topology W_A transformation
 │   │   ├── hypergraph_builder.py      # Innovation 3: Bidirectional hyperedge expansion
+│   │   ├── fact_hypergraph.py         # N-ary clinical fact hypergraph from PrimeKG shared-tail contexts
 │   │   ├── statistical_filter.py      # Innovation 4: Adaptive Heaviside cutoff
 │   │   ├── decision_gate.py           # Innovation 5: JEV System One groundedness gate
+│   │   ├── dynamic_tensor.py          # (P3, opt-in) trainable anisotropic tensor
+│   │   ├── entropy_gate.py            # (P3, opt-in) entropy-based abstention gate
+│   │   ├── weight_learner.py          # filter_k weight learning
 │   │   ├── prompt_builder.py          # Standardized 4-section clinical prompt builder
-│   │   ├── llm_client.py              # Unified LLM interface (HuggingFace / Ollama)
+│   │   ├── llm_client.py              # Unified LLM interface (HuggingFace / NVIDIA NIM / Ollama)
 │   │   └── hcad_retriever.py          # End-to-end integrated HCAD-RAG pipeline
 │   ├── baselines/
 │   │   ├── baseline_llm.py            # Parametric LLM baseline (zero-retrieval)
 │   │   └── vanilla_vector_rag.py      # Standard dense Top-K vector baseline
 │   └── evaluation/
 │       ├── base_paper_evaluator.py    # Scoring & selection rubric evaluator (LLM-as-a-judge)
-│       ├── run_base_paper_benchmark.py# Base paper benchmark test runner
-│       ├── medqa_evaluator.py         # USMLE MCQ evaluation
-│       └── results_analyzer.py        # Results visualization & table export
+│       ├── run_base_paper_benchmark.py# Base paper benchmark runner (checkpointed, resume-safe)
+│       ├── hallucination_evaluator.py # MedHallu hallucination evaluation
+│       ├── metrics.py                 # NDCG@K, Recall@K, McNemar, citation precision
+│       └── plots.py                   # Benchmark figures rendered from results JSON
+├── workbench/                         # Next.js clinical intelligence dashboard (see workbench/README.md)
 └── results/
     ├── figures/                       # Benchmark charts
     └── tables/                        # Summary metrics & logs
@@ -163,7 +176,6 @@ hcad-rag/
 | Dataset | Source | Purpose |
 |---------|--------|---------|
 | [PrimeKG](https://doi.org/10.7910/DVN/IXA7BM) | Harvard Dataverse | Precision medicine knowledge graph (129K nodes, 4M+ edges) |
-| [MedQA-USMLE](https://huggingface.co/datasets/GBaker/MedQA-USMLE-4-options) | HuggingFace | Standard clinical board question benchmark (USMLE 4-option) |
 | [MedHallu](https://huggingface.co/datasets/UTAustin-AIHealth/MedHallu) | HuggingFace | Medical hallucination detection dataset |
 | PMC Open Access | NCBI / PMC | Curated open-access clinical text corpus |
 
