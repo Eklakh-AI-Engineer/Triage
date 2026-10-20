@@ -234,7 +234,22 @@ Examples:
     )
     p_save.set_defaults(func=cmd_save_pipeline)
 
+    # serve (workbench API)
+    p_serve = subparsers.add_parser(
+        "serve", help="Serve the TRIAGE workbench HTTP API (FastAPI)",
+    )
+    p_serve.add_argument("--host", type=str, default="0.0.0.0", help="Bind host")
+    p_serve.add_argument("--port", type=int, default=8000, help="Bind port")
+    p_serve.set_defaults(func=cmd_serve)
+
     return parser
+
+def cmd_serve(args):
+    """Run the FastAPI server for the Next.js workbench."""
+    import uvicorn
+    from src.api.server import app
+    logger.info("Starting TRIAGE API on %s:%d ...", args.host, args.port)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 def cmd_evaluate(args):
     """Alias of base-paper: the benchmark evaluates all three systems."""

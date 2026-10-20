@@ -26,3 +26,6 @@ typesafe-sdk
 # SciSpacy biomedical NER models (BOTH required — per-model loading is now fault-isolated)
 https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
 https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27

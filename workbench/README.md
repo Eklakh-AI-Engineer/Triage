@@ -21,8 +21,15 @@ SERPINA6/prednisolone).
 
 ## Wiring the Python backend
 
+Start the API on the machine that has the prepared artifacts (A100):
+
+```bash
+python src/main.py prepare --rebuild   # once: graph + vector store
+python src/main.py serve --host 0.0.0.0 --port 8000
+```
+
 The UI and the built-in route handlers share one contract
-(`src/lib/types.ts`):
+(`src/lib/types.ts`, implemented by `src/api/server.py`):
 
 | Endpoint                 | Method | Contract               |
 | ------------------------ | ------ | ---------------------- |
@@ -33,11 +40,13 @@ The UI and the built-in route handlers share one contract
 Two wiring modes:
 
 - **Client-direct (recommended):** set `NEXT_PUBLIC_TRIAGE_API_BASE` (e.g.
-  `http://localhost:8000`). The client calls the Python backend directly.
+  `http://localhost:8000`) in `workbench/.env.local` and restart
+  `npm run dev`. The client calls the Python backend directly.
 - **Server-proxy:** set `TRIAGE_API_BASE` on the Next.js server. The built-in
   route handlers proxy the backend, keeping the Python origin private.
 
 With neither set, every request resolves locally (mock engine + mock routes).
+`GET /api/triage/health` reports pipeline readiness without loading anything.
 
 ## Gate controls
 
