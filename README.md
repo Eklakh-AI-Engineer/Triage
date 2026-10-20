@@ -73,15 +73,14 @@ pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/e
 Use the repository-root `.env` as the single local environment file — copy
 `.env.example` and keep one profile:
 
-- **Profile A (fully local, zero API keys):** `LLM_PROVIDER=ollama`,
-  `JUDGE_OLLAMA_MODEL=qwen2.5:14b`, `WANDB_MODE=disabled`. Generator
-  (`llama3.1:8b`) and judge run via ollama, the JEV gate runs in local
-  calibrated mode, results stay in local JSON + figures, and SapBERT
-  downloads anonymously. Nothing phones home.
-- **Profile B (cloud upgrades, opt-in):** `JUDGE_PROVIDER=huggingface` puts
-  the judge on paper-parity `Qwen/Qwen2.5-72B-Instruct` via HF Inference
-  Providers; `WANDB_API_KEY` (with `WANDB_MODE` unset) streams telemetry
-  online; `TYPESAFE_API_KEY` enables the live JEV gate.
+- **Profile A (all LLMs local via ollama, zero LLM API keys):**
+  `LLM_PROVIDER=ollama` + `JUDGE_OLLAMA_MODEL=qwen2.5:14b`. Generator
+  (`llama3.1:8b`) and judge both run via ollama. Everything else keeps its
+  existing behavior — W&B stays online if `WANDB_API_KEY` is set, the JEV
+  gate stays live if `TYPESAFE_API_KEY` is set.
+- **Profile B (cloud-judge upgrade, opt-in):** `JUDGE_PROVIDER=huggingface`
+  puts the judge on paper-parity `Qwen/Qwen2.5-72B-Instruct` via HF Inference
+  Providers while the generator stays local.
 
 ```bash
 LLM_PROVIDER="huggingface"                              # "huggingface", "nvidia" (NIM), or "ollama"
