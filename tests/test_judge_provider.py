@@ -7,7 +7,7 @@ identified by constructing the client with JUDGE_HF_MODEL.
 
 import pytest
 
-from src.config import JUDGE_HF_MODEL, JUDGE_NVIDIA_MODEL
+from src.config import JUDGE_HF_MODEL, JUDGE_NVIDIA_MODEL, JUDGE_OLLAMA_MODEL
 from src.core.llm_client import UnifiedLLMClient
 
 
@@ -35,7 +35,8 @@ def test_no_override_judge_follows_llm_provider():
     generator = UnifiedLLMClient(model=None)
 
     assert judge.provider == "ollama"
-    assert judge.model == "qwen2.5:72b"  # JUDGE_OLLAMA_MODEL default
+    # Whatever JUDGE_OLLAMA_MODEL the environment configured (default or .env).
+    assert judge.model == JUDGE_OLLAMA_MODEL
     assert generator.provider == "ollama"
     assert generator.model == "llama3.1:8b"
 
@@ -59,7 +60,7 @@ def test_judge_provider_explicit_kwarg_still_wins(monkeypatch):
     # An explicit provider argument takes precedence over the env override.
     judge = UnifiedLLMClient(model=JUDGE_HF_MODEL, provider="ollama")
     assert judge.provider == "ollama"
-    assert judge.model == "qwen2.5:72b"
+    assert judge.model == JUDGE_OLLAMA_MODEL
 
 
 def test_generator_untouched_by_judge_provider(monkeypatch):

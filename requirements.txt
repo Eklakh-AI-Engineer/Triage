@@ -3,7 +3,7 @@ torch>=2.1
 sentence-transformers>=2.7,<4.0
 spacy>=3.8
 thinc>=8.3  # numpy 2.x ABI compatible build required
-scispacy>=0.5.4,<0.6
+scispacy>=0.6,<0.7
 faiss-cpu>=1.7.4
 transformers>=4.40,<5.0
 scikit-learn>=1.3
@@ -23,9 +23,11 @@ huggingface_hub>=0.23
 requests>=2.31
 # Optional: enables the live JEV Decision Gate (local calibrated mode works without it)
 typesafe-sdk
-# SciSpacy biomedical NER models (BOTH required — per-model loading is now fault-isolated)
-https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
-https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
+# SciSpacy biomedical NER models (BOTH required - per-model loading is fault-isolated).
+# The 0.5.4 model tarballs declare spacy<3.8 but run fine under 3.8 (tested);
+# install them with --no-deps in a separate command, see README Quick Start.
+# https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+# https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
