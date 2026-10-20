@@ -78,6 +78,8 @@ LLM_PROVIDER="huggingface"                              # "huggingface", "nvidia
 WANDB_API_KEY="your_rotated_wandb_api_key"              # Optional, enables experiment tracking
 WANDB_PROJECT="hcad-rag"
 # WANDB_ENTITY="your_wandb_username_or_team"            # Optional
+# JUDGE_PROVIDER="huggingface"                          # Optional hybrid: generator local (ollama),
+                                                        # judge remote (huggingface = Qwen2.5-72B, or nvidia)
 ```
 
 The root `.env` is git-ignored and is loaded centrally by `src.config`; add
@@ -120,6 +122,16 @@ per-question numeric metrics when `WANDB_API_KEY` is configured.
 Weight learning tunes only `filter_k`, the learned parameter currently consumed by
 the retriever. Anisotropic and component-scoring weights remain at their configured
 values; retrieval and model architecture are unchanged.
+
+### Hybrid judging (small-GPU machines)
+
+`JUDGE_PROVIDER` decouples the judge from the generator. With
+`LLM_PROVIDER=ollama` (local `llama3.1:8b` via ollama) plus
+`JUDGE_PROVIDER=huggingface`, the judge runs on the paper-parity
+`Qwen/Qwen2.5-72B-Instruct` through Hugging Face Inference Providers
+(pay-per-token, needs HF billing; roughly $2 for a 50-sample run) while all
+generation stays free and local. `JUDGE_PROVIDER=nvidia` does the same via
+NVIDIA NIM. Without the variable, the judge follows `LLM_PROVIDER`.
 
 ---
 

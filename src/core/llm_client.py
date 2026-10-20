@@ -35,6 +35,14 @@ class UnifiedLLMClient:
         )
 
         self.provider = (provider or os.getenv("LLM_PROVIDER") or LLM_PROVIDER).lower()
+        # Judge-specific provider override: run the generator fully local
+        # (e.g., ollama on a small GPU) while the judge uses a stronger
+        # remote model (e.g., huggingface cloud = Qwen2.5-72B-Instruct).
+        # An explicit provider kwarg always wins over the env override.
+        if not provider and (model == JUDGE_HF_MODEL or model == "judge"):
+            judge_provider = (os.getenv("JUDGE_PROVIDER") or "").strip().lower()
+            if judge_provider:
+                self.provider = judge_provider
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.token = os.getenv("HF_TOKEN") or HF_TOKEN
