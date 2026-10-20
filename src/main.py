@@ -25,17 +25,19 @@ def cmd_prepare(args):
 
     # ── Step 1: Download all raw datasets ──────────────────────────
     print("\n" + "=" * 60)
-    print("Step 1/5: Downloading datasets (PrimeKG, MedQA, MedHallu)...")
+    print("Step 1/5: Downloading datasets (PrimeKG, MedHallu)...")
     print("=" * 60)
     paths = download_all()
-    failed = [
-        name for name in ("primekg", "medqa", "medhallu")
-        if isinstance(paths, dict) and name not in paths
-    ]
-    if failed:
-        # required-dataset failures previously propagated
-        # as confusing downstream errors.
-        raise RuntimeError(f"Dataset preparation incomplete - failed: {failed}")
+    if "primekg" not in paths:
+        # PrimeKG is the substrate - nothing downstream works without it.
+        raise RuntimeError("Dataset preparation incomplete - PrimeKG download failed")
+    if "medhallu" not in paths:
+        # MedHallu is only needed by the hallucination evaluator, not by the
+        # base-paper benchmark - a failure here must not block prepare.
+        logger.warning(
+            "MedHallu unavailable - hallucination evaluation will not run "
+            "until it downloads. Continuing."
+        )
 
     # ── Step 2: Prepare PMC clinical text chunks ───────────────────
     print("\n" + "=" * 60)
