@@ -3,7 +3,9 @@
 import {
   Background,
   Controls,
+  Handle,
   MarkerType,
+  Position,
   ReactFlow,
   type Edge,
   type Node,
@@ -43,11 +45,13 @@ function ClinicalNode({ data }: { data: Record<string, unknown> }) {
         color: "#cbd5e1",
       }}
     >
+      <Handle type="target" position={Position.Top} isConnectable={false} />
       <span
         className="w-2 h-2 rounded-full shrink-0"
         style={{ background: color, boxShadow: `0 0 8px ${color}` }}
       />
       {label}
+      <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </div>
   );
 }
@@ -163,7 +167,6 @@ export function KnowledgeGraph() {
               selectNode(selectedNode === node.id ? null : node.id)
             }
             fitView
-            proOptions={{ hideAttribution: true }}
             minZoom={0.4}
             maxZoom={1.8}
           >
