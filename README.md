@@ -71,17 +71,25 @@ pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/e
 ```
 
 Use the repository-root `.env` as the single local environment file — copy
-`.env.example` as the starting point (it documents the full-fledged single-GPU
-setup: local ollama generator, HF-cloud 72B judge, W&B online):
+`.env.example` and keep one profile:
+
+- **Profile A (fully local, zero API keys):** `LLM_PROVIDER=ollama`,
+  `JUDGE_OLLAMA_MODEL=qwen2.5:14b`, `WANDB_MODE=disabled`. Generator
+  (`llama3.1:8b`) and judge run via ollama, the JEV gate runs in local
+  calibrated mode, results stay in local JSON + figures, and SapBERT
+  downloads anonymously. Nothing phones home.
+- **Profile B (cloud upgrades, opt-in):** `JUDGE_PROVIDER=huggingface` puts
+  the judge on paper-parity `Qwen/Qwen2.5-72B-Instruct` via HF Inference
+  Providers; `WANDB_API_KEY` (with `WANDB_MODE` unset) streams telemetry
+  online; `TYPESAFE_API_KEY` enables the live JEV gate.
+
 ```bash
-HF_TOKEN="your_huggingface_token"
-TYPESAFE_API_KEY="your_typesafe_or_openrouter_api_key"  # Optional, enables live JEV System One gate
 LLM_PROVIDER="huggingface"                              # "huggingface", "nvidia" (NIM), or "ollama"
+# JUDGE_PROVIDER="huggingface"                          # Optional hybrid: generator local (ollama),
+                                                        # judge remote (huggingface = Qwen2.5-72B, or nvidia)
 WANDB_API_KEY="your_rotated_wandb_api_key"              # Optional, enables experiment tracking
 WANDB_PROJECT="hcad-rag"
 # WANDB_ENTITY="your_wandb_username_or_team"            # Optional
-# JUDGE_PROVIDER="huggingface"                          # Optional hybrid: generator local (ollama),
-                                                        # judge remote (huggingface = Qwen2.5-72B, or nvidia)
 ```
 
 The root `.env` is git-ignored and is loaded centrally by `src.config`; add
