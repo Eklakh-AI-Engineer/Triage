@@ -70,7 +70,9 @@ pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/e
 pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
 ```
 
-Use the repository-root `.env` as the single local environment file:
+Use the repository-root `.env` as the single local environment file — copy
+`.env.example` as the starting point (it documents the full-fledged single-GPU
+setup: local ollama generator, HF-cloud 72B judge, W&B online):
 ```bash
 HF_TOKEN="your_huggingface_token"
 TYPESAFE_API_KEY="your_typesafe_or_openrouter_api_key"  # Optional, enables live JEV System One gate
