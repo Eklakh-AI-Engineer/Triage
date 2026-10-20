@@ -10,16 +10,24 @@ export function Panel({
   children: ReactNode;
   className?: string;
 }) {
-  return (
-    <div className={`glass-panel p-5 ${className}`}>{children}</div>
-  );
+  return <div className={`panel p-6 ${className}`}>{children}</div>;
 }
 
 export function SectionTitle({ children }: { children: ReactNode }) {
   return (
-    <h2 className="text-[13px] uppercase tracking-[0.14em] text-slate-500 mb-4 font-sans">
+    <div className="mb-4">
+      <h2 className="font-display text-[17px] font-medium tracking-tight text-ink">
+        {children}
+      </h2>
+    </div>
+  );
+}
+
+export function Eyebrow({ children }: { children: ReactNode }) {
+  return (
+    <span className="block font-mono text-[10px] uppercase tracking-[0.16em] text-faint mt-0.5">
       {children}
-    </h2>
+    </span>
   );
 }
 
@@ -34,12 +42,12 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-800/80 bg-slate-950/60 text-[11.5px] font-mono ${className}`}
+      className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-line bg-surface text-[11px] font-mono text-muted ${className}`}
     >
       {dotColor && (
         <span
-          className="w-[7px] h-[7px] rounded-full pulse-dot"
-          style={{ background: dotColor, boxShadow: `0 0 8px ${dotColor}` }}
+          className="w-1.5 h-1.5 rounded-full"
+          style={{ background: dotColor }}
         />
       )}
       {children}
@@ -49,8 +57,8 @@ export function Badge({
 
 export function Gauge({
   value,
-  color = "#00f2fe",
-  height = 8,
+  color = "#c15f3c",
+  height = 6,
   className = "",
 }: {
   value: number;
@@ -60,30 +68,27 @@ export function Gauge({
 }) {
   return (
     <div
-      className={`w-full rounded-md bg-slate-800/60 overflow-hidden ${className}`}
+      className={`w-full rounded-full bg-line overflow-hidden ${className}`}
       style={{ height }}
     >
       <motion.div
         initial={{ width: 0 }}
         animate={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }}
-        transition={{ duration: 0.9, ease: "easeOut" }}
-        className="h-full rounded-md"
-        style={{
-          background: `linear-gradient(90deg, #00f2fe, ${color})`,
-          boxShadow: `0 0 12px ${color}66`,
-        }}
+        transition={{ duration: 0.7, ease: "easeOut" }}
+        className="h-full rounded-full"
+        style={{ background: color }}
       />
     </div>
   );
 }
 
 export const ENTITY_COLORS: Record<string, string> = {
-  drug: "#60a5fa",
-  disease: "#f87171",
-  gene: "#c084fc",
-  protein: "#a78bfa",
-  phenotype: "#34d399",
-  adverse_effect: "#fb923c",
+  drug: "#3d6fa8",
+  disease: "#b4543f",
+  gene: "#7b5cb8",
+  protein: "#4a8a8a",
+  phenotype: "#3e8e6b",
+  adverse_effect: "#c08a2d",
 };
 
 export function EntityChip({
@@ -95,23 +100,23 @@ export function EntityChip({
   type: string;
   confidence?: number;
 }) {
-  const color = ENTITY_COLORS[type] ?? "#94a3b8";
+  const color = ENTITY_COLORS[type] ?? "#75726a";
   return (
     <motion.span
-      initial={{ opacity: 0, scale: 0.8 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.8 }}
+      initial={{ opacity: 0, y: 2 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
       layout
-      className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono border"
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-mono border"
       style={{
         color,
-        borderColor: `${color}55`,
-        background: `${color}14`,
+        borderColor: `${color}30`,
+        background: `${color}0a`,
       }}
     >
       {name}
       {confidence !== undefined && (
-        <span className="text-slate-500">{confidence.toFixed(2)}</span>
+        <span className="text-faint">{confidence.toFixed(2)}</span>
       )}
     </motion.span>
   );

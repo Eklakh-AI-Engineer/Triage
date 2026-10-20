@@ -7,9 +7,9 @@ import { useWorkbench } from "@/lib/store";
 import type { TriageMode } from "@/lib/types";
 
 const MODES: { id: TriageMode; label: string; hint: string }[] = [
-  { id: "strict", label: "Strict Gating (Recommended)", hint: "High threshold · aggressive abstention" },
-  { id: "lenient", label: "Lenient Screening", hint: "Standard multi-hop retrieval" },
-  { id: "stress", label: "Stress Test / Adversarial", hint: "Injects noisy PubMed distractors" },
+  { id: "strict", label: "Strict gating", hint: "Recommended — high threshold, aggressive abstention" },
+  { id: "lenient", label: "Lenient screening", hint: "Standard multi-hop retrieval" },
+  { id: "stress", label: "Stress / adversarial", hint: "Injects noisy PubMed distractors" },
 ];
 
 function LabeledSlider({
@@ -32,15 +32,16 @@ function LabeledSlider({
   onChange: (v: number) => void;
 }) {
   return (
-    <div className="mb-6">
-      <div className="flex justify-between mb-2">
-        <span className="text-[12px] text-slate-400 font-mono">
-          {label} <span className="text-slate-600">({symbol})</span>
+    <div className="mb-7">
+      <div className="flex justify-between items-baseline mb-3">
+        <span className="text-[12.5px] text-ink">
+          {label}{" "}
+          <span className="font-mono text-[10.5px] text-faint">{symbol}</span>
         </span>
-        <span className="text-glow font-mono text-[12px]">{format(value)}</span>
+        <span className="font-mono text-[12.5px] text-ink">{format(value)}</span>
       </div>
       <SliderPrimitive.Root
-        className="relative flex items-center select-none touch-none w-full h-5"
+        className="relative flex items-center select-none touch-none w-full h-4"
         value={[value]}
         min={min}
         max={max}
@@ -48,11 +49,11 @@ function LabeledSlider({
         onValueChange={(v) => onChange(v[0])}
         aria-label={label}
       >
-        <SliderPrimitive.Track className="bg-slate-800/80 relative grow rounded-full h-[6px]">
-          <SliderPrimitive.Range className="absolute bg-gradient-to-r from-glow to-admit rounded-full h-full" />
+        <SliderPrimitive.Track className="bg-line relative grow rounded-full h-[3px]">
+          <SliderPrimitive.Range className="absolute bg-ink rounded-full h-full" />
         </SliderPrimitive.Track>
         <SliderPrimitive.Thumb
-          className="block w-4 h-4 rounded-full bg-slate-100 shadow-[0_0_10px_rgba(0,242,254,0.6)] border-2 border-glow cursor-grab focus:outline-none"
+          className="block w-3.5 h-3.5 rounded-full bg-surface border-[1.5px] border-ink cursor-grab focus:outline-none transition-transform hover:scale-110"
           aria-label={label}
         />
       </SliderPrimitive.Root>
@@ -74,24 +75,24 @@ export function GateConfigDrawer({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
+        <Dialog.Overlay className="fixed inset-0 bg-ink/15 z-40" />
         <Dialog.Content asChild>
           <motion.div
-            initial={{ x: 380, opacity: 0 }}
+            initial={{ x: 60, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: 380, opacity: 0 }}
-            transition={{ type: "spring", damping: 26, stiffness: 240 }}
-            className="glass-panel fixed top-4 right-4 bottom-4 w-[min(94vw,400px)] z-50 p-6 overflow-y-auto"
+            exit={{ x: 60, opacity: 0 }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+            className="panel fixed top-4 right-4 bottom-4 w-[min(94vw,400px)] z-50 p-7 overflow-y-auto rounded-2xl"
           >
-            <Dialog.Title className="text-sm uppercase tracking-[0.14em] text-slate-400 font-sans">
-              Triage Gate Configuration
+            <Dialog.Title className="font-display text-[18px] font-medium tracking-tight text-ink">
+              Gate configuration
             </Dialog.Title>
-            <Dialog.Description className="text-[11.5px] text-slate-600 font-mono mt-1 mb-6">
+            <Dialog.Description className="text-[12px] text-muted mt-1 mb-8">
               Dual-gate statistical filter · soft Gram-Schmidt decoupling
             </Dialog.Description>
 
             <LabeledSlider
-              label="Abstention Sensitivity"
+              label="Abstention sensitivity"
               symbol="τ entropy"
               value={config.tauEntropy}
               min={0.05}
@@ -101,7 +102,7 @@ export function GateConfigDrawer({
               onChange={(v) => setConfig({ tauEntropy: v })}
             />
             <LabeledSlider
-              label="Decoupling Strength"
+              label="Decoupling strength"
               symbol="α ortho"
               value={config.alphaDecoupling}
               min={0}
@@ -111,32 +112,37 @@ export function GateConfigDrawer({
               onChange={(v) => setConfig({ alphaDecoupling: v })}
             />
             <LabeledSlider
-              label="Evidence Word Budget"
+              label="Evidence word budget"
               symbol="B"
               value={config.wordBudget}
               min={250}
               max={1000}
               step={50}
-              format={(v) => `${v} w`}
+              format={(v) => `${v} words`}
               onChange={(v) => setConfig({ wordBudget: v })}
             />
 
-            <div className="text-[12px] text-slate-400 font-mono mb-2">
-              Triage Mode
-            </div>
-            <div className="flex flex-col gap-2 mb-6">
+            <div className="text-[12.5px] text-ink mb-3">Triage mode</div>
+            <div className="flex flex-col gap-2 mb-8">
               {MODES.map((m) => (
                 <button
                   key={m.id}
                   onClick={() => setConfig({ mode: m.id })}
-                  className={`text-left px-3 py-2.5 rounded-xl border text-[12px] font-mono transition ${
+                  className={`text-left px-3.5 py-2.5 rounded-xl border text-[12.5px] transition ${
                     config.mode === m.id
-                      ? "border-admit text-admit bg-admit/10"
-                      : "border-slate-800/80 text-slate-500 bg-slate-950/50 hover:text-slate-300"
+                      ? "border-ink bg-canvas text-ink"
+                      : "border-line text-muted hover:border-line-strong hover:text-ink"
                   }`}
                 >
-                  [{m.label}]
-                  <span className="block text-[10px] text-slate-600 mt-0.5">
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        config.mode === m.id ? "bg-ink" : "bg-line-strong"
+                      }`}
+                    />
+                    {m.label}
+                  </span>
+                  <span className="block text-[11px] text-faint mt-1 ml-3.5">
                     {m.hint}
                   </span>
                 </button>
@@ -148,13 +154,13 @@ export function GateConfigDrawer({
                 onOpenChange(false);
                 rerun();
               }}
-              className="w-full font-mono text-[12.5px] px-4 py-2.5 rounded-xl border border-glow bg-glow/10 text-glow hover:bg-glow/20 hover:shadow-[0_0_18px_rgba(0,242,254,0.25)] transition"
+              className="w-full text-[13px] font-medium py-2.5 rounded-lg bg-ink text-canvas hover:opacity-85 transition"
             >
-              APPLY &amp; RE-RUN TRIAGE
+              Apply &amp; re-run
             </button>
 
             <Dialog.Close
-              className="absolute top-5 right-5 text-slate-500 hover:text-slate-200 text-lg leading-none"
+              className="absolute top-6 right-6 text-faint hover:text-ink transition text-lg leading-none"
               aria-label="Close"
             >
               ×

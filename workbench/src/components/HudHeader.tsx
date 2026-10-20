@@ -1,23 +1,7 @@
 "use client";
 
 import { useWorkbench } from "@/lib/store";
-import { Badge } from "./ui";
 import { availableCases } from "@/lib/api";
-
-export function TriageLogo() {
-  return (
-    <svg width="34" height="34" viewBox="0 0 40 40" className="drop-shadow-[0_0_8px_rgba(0,242,254,0.8)]">
-      <polyline
-        points="2,20 12,20 16,8 22,32 26,20 38,20"
-        fill="none"
-        stroke="#00f2fe"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 export function HudHeader() {
   const setQuery = useWorkbench((s) => s.setQuery);
@@ -25,33 +9,40 @@ export function HudHeader() {
   const abstentionRate = result?.abstentionRate ?? 18.4;
 
   return (
-    <header className="flex flex-wrap items-center gap-x-5 gap-y-3 py-3 pb-6">
-      <div className="flex items-center gap-3">
-        <TriageLogo />
-        <div>
-          <b className="text-2xl tracking-[0.06em] font-sans">TRIAGE</b>
-          <small className="block text-slate-500 text-[11px]">
-            Clinical Gated Evidence Decoupling &amp; Selective Retrieval
-          </small>
-        </div>
+    <header className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4 pb-6">
+      <div>
+        <h1 className="font-display text-[26px] font-medium tracking-tight leading-none text-ink">
+          TRIAGE
+        </h1>
+        <p className="mt-1.5 text-[12px] text-muted">
+          Gated evidence selection &amp; context decoupling for clinical RAG
+        </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge dotColor="#10b981">Gate Status: ARMED</Badge>
-        <Badge>Substrate: PrimeKG · 129,262 nodes · 4M edges</Badge>
-        <Badge>Engine: llama-3.2-11b (NIM)</Badge>
-        <Badge>
-          Abstention Rate:{" "}
-          <b className="text-glow ml-1">{abstentionRate.toFixed(1)}%</b>
-        </Badge>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[11px] text-muted">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-admit pulse-dot" />
+          Gate armed
+        </span>
+        <span className="text-faint">/</span>
+        <span>PrimeKG · 129,262 nodes</span>
+        <span className="text-faint">/</span>
+        <span>llama-3.2-11b</span>
+        <span className="text-faint">/</span>
+        <span>
+          abstention{" "}
+          <b className="font-medium text-ink ml-0.5">
+            {abstentionRate.toFixed(1)}%
+          </b>
+        </span>
       </div>
 
-      <div className="ml-auto flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 w-full lg:w-auto">
         {availableCases().map((c) => (
           <button
             key={c.id}
             onClick={() => setQuery(c.query)}
-            className="text-[11px] px-2.5 py-1.5 rounded-lg border border-slate-800/80 bg-slate-950/50 text-slate-500 hover:text-slate-200 hover:border-glow transition-colors font-mono"
+            className="text-[11.5px] px-3 py-1.5 rounded-lg text-muted hover:text-ink hover:bg-surface hover:border-line-strong border border-transparent transition-colors"
           >
             {c.label}
           </button>

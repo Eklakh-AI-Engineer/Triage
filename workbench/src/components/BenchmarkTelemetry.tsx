@@ -11,64 +11,77 @@ import {
   Tooltip,
 } from "recharts";
 import { useWorkbench } from "@/lib/store";
-import { Badge, Panel, SectionTitle } from "./ui";
+import { Panel } from "./ui";
 
 export function BenchmarkTelemetry() {
   const benchmark = useWorkbench((s) => s.benchmark);
 
   return (
     <Panel>
-      <SectionTitle>Live Clinical Validation Telemetry</SectionTitle>
+      <div className="mb-4">
+        <h2 className="font-display text-[17px] font-medium tracking-tight text-ink">
+          Validation telemetry
+        </h2>
+        <span className="block font-mono text-[10px] uppercase tracking-[0.16em] text-faint mt-0.5">
+          base-paper benchmark · live
+        </span>
+      </div>
       {!benchmark ? (
-        <div className="h-[300px] flex items-center justify-center text-[11.5px] font-mono text-slate-600">
+        <div className="h-[300px] flex items-center justify-center text-[11.5px] font-mono text-faint">
           loading benchmark telemetry…
         </div>
       ) : (
-        <div className="flex flex-col lg:flex-row gap-4">
+        <div className="flex flex-col lg:flex-row gap-5">
           <div className="w-full lg:w-[46%] h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={benchmark.radar} outerRadius="72%">
-                <PolarGrid stroke="rgba(30,41,59,0.9)" />
+                <PolarGrid stroke="#e9e6de" />
                 <PolarAngleAxis
                   dataKey="dimension"
-                  tick={{ fill: "#64748b", fontSize: 9, fontFamily: "var(--font-jetbrains)" }}
+                  tick={{
+                    fill: "#75726a",
+                    fontSize: 9.5,
+                    fontFamily: "var(--font-mono)",
+                  }}
                 />
                 <PolarRadiusAxis
                   domain={[0, 100]}
-                  tick={{ fill: "#475569", fontSize: 8 }}
+                  tick={{ fill: "#a8a49b", fontSize: 8 }}
                   axisLine={false}
                 />
                 <Radar
                   name="Baseline LLM"
                   dataKey="baseline"
-                  stroke="#64748b"
-                  fill="#64748b"
-                  fillOpacity={0.08}
+                  stroke="#a8a49b"
+                  fill="#a8a49b"
+                  fillOpacity={0.06}
                   strokeWidth={1}
                 />
                 <Radar
                   name="Vanilla RAG"
                   dataKey="vanilla"
-                  stroke="#f59e0b"
-                  fill="#f59e0b"
-                  fillOpacity={0.1}
+                  stroke="#c08a2d"
+                  fill="#c08a2d"
+                  fillOpacity={0.08}
                   strokeWidth={1.2}
                 />
                 <Radar
                   name="TRIAGE"
                   dataKey="triage"
-                  stroke="#00f2fe"
-                  fill="#00f2fe"
-                  fillOpacity={0.16}
-                  strokeWidth={1.8}
+                  stroke="#c15f3c"
+                  fill="#c15f3c"
+                  fillOpacity={0.12}
+                  strokeWidth={1.6}
                 />
                 <Tooltip
                   contentStyle={{
-                    background: "rgba(2,6,23,0.92)",
-                    border: "1px solid rgba(0,242,254,0.4)",
-                    borderRadius: 12,
-                    fontFamily: "var(--font-jetbrains)",
+                    background: "#ffffff",
+                    border: "1px solid #e9e6de",
+                    borderRadius: 10,
+                    fontFamily: "var(--font-mono)",
                     fontSize: 11,
+                    color: "#1f1e1d",
+                    boxShadow: "0 4px 16px rgba(31,30,29,0.06)",
                   }}
                 />
               </RadarChart>
@@ -76,50 +89,46 @@ export function BenchmarkTelemetry() {
           </div>
 
           <div className="flex-1 min-w-0">
-            <h3 className="text-[11px] uppercase tracking-[0.12em] text-slate-500 mb-2">
-              8-Criteria Win-Rate vs Vanilla RAG
+            <h3 className="text-[12.5px] font-medium text-ink mb-1">
+              8-criteria win-rate vs vanilla RAG
             </h3>
-            <div className="max-h-[190px] overflow-y-auto pr-1">
+            <div className="max-h-[186px] overflow-y-auto pr-1 -mr-1">
               {benchmark.winRate.map((w) => (
-                <div key={w.criterion} className="my-1.5">
-                  <div className="flex justify-between text-[10.5px] font-mono">
-                    <span className="text-slate-400">{w.criterion}</span>
-                    <span className="text-slate-500">{w.rate}%</span>
+                <div key={w.criterion} className="my-2">
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-muted">{w.criterion}</span>
+                    <span className="font-mono text-ink">{w.rate}%</span>
                   </div>
-                  <div className="h-[7px] rounded-md bg-slate-800/60 overflow-hidden mt-0.5">
+                  <div className="h-[4px] rounded-full bg-line overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
                       animate={{ width: `${w.rate}%` }}
-                      transition={{ duration: 0.8, ease: "easeOut" }}
-                      className="h-full rounded-md"
+                      transition={{ duration: 0.7, ease: "easeOut" }}
+                      className="h-full rounded-full"
                       style={{
                         background:
-                          w.rate > 60
-                            ? "linear-gradient(90deg,#00f2fe,#10b981)"
-                            : "linear-gradient(90deg,#00f2fe,#f59e0b)",
-                        boxShadow: "0 0 10px rgba(0,242,254,0.25)",
+                          w.rate > 60 ? "#3e8e6b" : "#c08a2d",
                       }}
                     />
                   </div>
                 </div>
               ))}
             </div>
-            <div className="flex flex-wrap gap-2 mt-3">
-              <Badge
-                dotColor={benchmark.mcnemar.significant ? "#10b981" : "#f59e0b"}
-                className={
-                  benchmark.mcnemar.significant
-                    ? "border-admit/60 text-admit"
-                    : "border-observe/60 text-observe"
-                }
-              >
-                McNemar χ²={benchmark.mcnemar.statistic} · p &lt;{" "}
-                {benchmark.mcnemar.pValue < 0.001
-                  ? "0.001"
-                  : benchmark.mcnemar.pValue.toFixed(3)}{" "}
-                · {benchmark.mcnemar.significant ? "SIGNIFICANT" : "NS"}
-              </Badge>
-              <Badge>n = {benchmark.nQueries} queries · 5-dim judged</Badge>
+            <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-line">
+              {benchmark.mcnemar.significant ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-admit/30 bg-admit/5 text-admit font-mono text-[11px]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-admit" />
+                  McNemar p &lt; 0.001 · significant
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-line text-muted font-mono text-[11px]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-line-strong" />
+                  McNemar not significant
+                </span>
+              )}
+              <span className="inline-flex items-center px-2.5 py-1 rounded-md border border-line text-muted font-mono text-[11px]">
+                n = {benchmark.nQueries}
+              </span>
             </div>
           </div>
         </div>
