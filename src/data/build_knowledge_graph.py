@@ -34,13 +34,18 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
-# Paths
-_CSV_PATH: Path = (
-    RAW_DATA_DIR / "primekg" / PRIMEKG_FILENAME
-    if (RAW_DATA_DIR / "primekg" / PRIMEKG_FILENAME).exists()
-    else RAW_DATA_DIR / PRIMEKG_FILENAME
-)
+# Paths. The CSV location is resolved at CALL time, not import time:
+# on a clean machine the download in `prepare` Step 1 finishes AFTER this
+# module is first imported, so a module-level .exists() check would freeze
+# on the wrong path.
 _PICKLE_PATH: Path = PROCESSED_DATA_DIR / "primekg_graph.gpickle"
+
+
+def _resolve_csv_path() -> Path:
+    subdir = RAW_DATA_DIR / "primekg" / PRIMEKG_FILENAME
+    if subdir.exists():
+        return subdir
+    return RAW_DATA_DIR / PRIMEKG_FILENAME
 
 # Build helpers
 
@@ -237,7 +242,7 @@ def load_knowledge_graph(
     Returns:
         A ``KnowledgeGraph`` instance wrapping the graph and indices.
     """
-    csv_path = csv_path or _CSV_PATH
+    csv_path = csv_path or _resolve_csv_path()
     pickle_path = pickle_path or _PICKLE_PATH
 
     if pickle_path.exists() and not force_rebuild:
