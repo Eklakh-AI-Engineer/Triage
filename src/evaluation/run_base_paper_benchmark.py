@@ -318,10 +318,26 @@ def generate_paper_protocol_questions(num_samples: int, generator=None) -> list[
 
     Difficulty tiers follow Sec. 1.2: 1/2/3-stage nested questions. This
     replaces hand-curated cases with the exact protocol the paper uses.
+
+    The generated set is CACHED to disk (keyed by sample count + seed).
+    Generation samples at temperature 0.3, so without the cache a resumed
+    run would produce different questions and silently discard every
+    checkpointed answer. With it, interrupted runs resume exactly.
     """
     from src.core.llm_client import UnifiedLLMClient
     from src.data.build_vector_store import load_vector_store
     import random as _random
+
+    cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            if cached and all("question" in s and "reference" in s for s in cached):
+                logger.info("Paper-protocol questions loaded from cache: %d.", len(cached))
+                return cached
+        except Exception as exc:
+            logger.warning("Question cache unreadable (%s); regenerating.", exc)
 
     if generator is None:
         generator = UnifiedLLMClient(temperature=0.3)
@@ -354,6 +370,13 @@ def generate_paper_protocol_questions(num_samples: int, generator=None) -> list[
                             "difficulty_tier": tier})
             tier_sizes[tier] += 1
     logger.info("Paper-protocol questions: %s", tier_sizes)
+    try:
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(samples, f, ensure_ascii=False)
+        logger.info("Paper-protocol questions cached to %s (resume-safe).", cache_path)
+    except Exception as exc:
+        logger.warning("Could not cache questions (%s); resume will regenerate.", exc)
     return samples
 
 @tracked_run(
