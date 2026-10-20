@@ -13,7 +13,7 @@ class TestPrepareCommand(unittest.TestCase):
         build_vector_store = Mock(return_value=collection)
         ingest_clinical_chunks = Mock(return_value=0)
         download_module = types.ModuleType("src.data.download_datasets")
-        download_module.download_all = Mock()
+        download_module.download_all = Mock(return_value={"primekg": "/tmp/kg.csv"})
         graph_module = types.ModuleType("src.data.build_knowledge_graph")
         graph_module.load_knowledge_graph = Mock(return_value=graph)
         vector_module = types.ModuleType("src.data.build_vector_store")
