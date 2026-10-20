@@ -391,6 +391,15 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
         logger.warning("Paper-protocol question generation failed (%s); "
                        "falling back to curated loader.", exc)
         samples = load_clinical_benchmark_samples(num_samples)
+    if not samples:
+        # An empty sample set (e.g., the LLM server died before generation)
+        # must NOT silently produce an empty results file - refuse loudly.
+        raise RuntimeError(
+            "No benchmark questions were generated or loaded. Refusing to "
+            "write empty results. Check that the LLM provider (ollama serve "
+            "on port 11434, or the configured provider) is reachable, then "
+            "re-run."
+        )
     logger.info(f"Loaded {len(samples)} clinical test cases.")
 
     # Per-sample results are appended to the checkpoint and all aggregation
