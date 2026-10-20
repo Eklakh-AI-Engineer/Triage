@@ -27,8 +27,14 @@ from src.config import (
     PROCESSED_DATA_DIR,
     RAW_DATA_DIR,
 )
+import os
 
 logger = logging.getLogger(__name__)
+
+# GPU encode batch for the embedding model. Small by default so the build
+# fits alongside resident LLMs on a single consumer GPU (e.g. 16 GB T4);
+# raise it on an idle A100 for faster ingestion.
+EMBED_BATCH = int(os.getenv("EMBED_BATCH", "128"))
 
 def _triple_to_sentence(head: str, relation: str, tail: str) -> str:
     """Convert a KG triple to a readable natural language sentence."""
@@ -164,10 +170,11 @@ def build_vector_store(
             for i in range(start_idx, end_idx)
         ]
 
-        # Fast GPU encoding
+        # GPU encoding; EMBED_BATCH (default 128) keeps activations small
+        # enough to coexist with ollama on one GPU.
         embeddings = model.encode(
             batch_texts,
-            batch_size=min(len(batch_texts), 1024),
+            batch_size=min(len(batch_texts), EMBED_BATCH),
             show_progress_bar=False,
             convert_to_numpy=True,
             normalize_embeddings=True,

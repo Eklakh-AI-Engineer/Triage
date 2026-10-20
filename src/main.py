@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -25,7 +26,7 @@ def cmd_prepare(args):
 
     # ── Step 1: Download all raw datasets ──────────────────────────
     print("\n" + "=" * 60)
-    print("Step 1/5: Downloading datasets (PrimeKG, MedHallu)...")
+    print("Step 1/5: Downloading datasets (PrimeKG, MedHallu, PMC)...")
     print("=" * 60)
     paths = download_all()
     if "primekg" not in paths:
@@ -37,6 +38,11 @@ def cmd_prepare(args):
         logger.warning(
             "MedHallu unavailable - hallucination evaluation will not run "
             "until it downloads. Continuing."
+        )
+    if "pmc" not in paths:
+        logger.warning(
+            "PMC articles unavailable - the vector store will contain PrimeKG "
+            "triples only (no clinical prose chunks). Continuing."
         )
 
     # ── Step 2: Prepare PMC clinical text chunks ───────────────────
@@ -95,13 +101,15 @@ def cmd_prepare(args):
     }
     col = build_vector_store(
         max_rows=args.max_rows,
-        batch_size=2048,
+        # Chroma add batch; the GPU encode batch inside is capped separately
+        # by EMBED_BATCH (default 128) so VRAM stays small alongside ollama.
+        batch_size=int(os.getenv("VECTOR_BATCH", "512")),
         relation_filter=CLINICAL_RELATIONS,
     )
     print(f"  KG triples indexed: {col.count():,} documents")
 
     # Ingest clinical text chunks
-    n_chunks = ingest_clinical_chunks(collection=col, batch_size=2048)
+    n_chunks = ingest_clinical_chunks(collection=col, batch_size=int(os.getenv("VECTOR_BATCH", "512")))
     print(f"  Clinical text chunks added: {n_chunks:,}")
     print(f"  Total vector store size: {col.count():,} documents")
 

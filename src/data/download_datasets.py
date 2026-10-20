@@ -208,10 +208,15 @@ def download_all(
 
     Returns:
         Mapping of dataset name → output path.
+
+    Args (of ``only``):
+        one of ``'primekg'``, ``'medhallu'``, ``'pmc'``.
     """
+    from src.data.download_pmc import download_pmc as _download_pmc
     downloaders = {
         "primekg": download_primekg,
         "medhallu": download_medhallu,
+        "pmc": _download_pmc,
     }
 
     if only is not None:
