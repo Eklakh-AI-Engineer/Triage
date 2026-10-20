@@ -100,6 +100,35 @@ def log_active_metrics(metrics: dict[str, Any], step: int | None = None) -> None
     if wandb.run is not None:
         wandb.log(metrics, step=step)
 
+def upload_checkpoint_artifact(files: list[Path], name: str = "benchmark-checkpoint") -> bool:
+    """Attach resumability files to the active run as a versioned artifact.
+
+    Kaggle wipes /kaggle/working when an interactive session dies, so an
+    off-box copy of the per-question checkpoint (and question cache) is the
+    only recovery path for a killed session. Safe no-op when W&B is
+    disabled/offline/unauthenticated or no run is active.
+    """
+    if WANDB_MODE.strip().lower() in ("disabled", "offline"):
+        return False
+    if not os.getenv("WANDB_API_KEY"):
+        return False
+
+    import wandb
+
+    if wandb.run is None:
+        return False
+
+    existing = [str(p) for p in files if Path(p).exists()]
+    if not existing:
+        return False
+
+    artifact = wandb.Artifact(name, type="checkpoint")
+    for path in existing:
+        artifact.add_file(path)
+    wandb.run.log_artifact(artifact)
+    logger.info("Uploaded checkpoint artifact '%s' with %d file(s).", name, len(existing))
+    return True
+
 def _log_bar_chart(
     run: Any,
     chart_name: str,

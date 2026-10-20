@@ -18,6 +18,7 @@ Outputs:
 
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -31,7 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.config import EVIDENCE_WORD_BUDGET, RANDOM_SEED, RESULTS_DIR
 from src.evaluation.base_paper_evaluator import BasePaperEvaluator
 from src.evaluation.metrics import citation_precision, mcnemar_test, ndcg_at_k, recall_at_k
-from src.wandb_tracking import log_base_paper_results, tracked_run
+from src.wandb_tracking import log_base_paper_results, tracked_run, upload_checkpoint_artifact
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -431,6 +432,11 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
     # questions evaluated in the current session.
 
     checkpoint_path = RESULTS_DIR / "base_paper_checkpoint.jsonl"
+    question_cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
+    # Off-box checkpoint upload cadence (sessions can die mid-run; the artifact
+    # in W&B is the only copy that survives a killed Kaggle session).
+    checkpoint_upload_every = int(os.getenv("WANDB_CHECKPOINT_EVERY", "5"))
+    evaluated_this_session = 0
     completed_questions = set()
     if checkpoint_path.exists():
         with open(checkpoint_path, "r", encoding="utf-8") as f:
@@ -562,6 +568,12 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
                 "retrieval": sample_retrieval,
                 "citations": sample_citations,
             }) + "\n")
+
+        evaluated_this_session += 1
+        if checkpoint_upload_every > 0 and evaluated_this_session % checkpoint_upload_every == 0:
+            upload_checkpoint_artifact(
+                [checkpoint_path, question_cache_path]
+            )
 
     # Aggregate from the checkpoint so resumed runs include previously
     # evaluated questions of this sample set.

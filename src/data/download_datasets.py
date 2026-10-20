@@ -170,7 +170,6 @@ def download_medhallu(force: bool = False) -> Path:
             ds = load_dataset(
                 MEDHALLU_DATASET_ID,
                 config_name,
-                trust_remote_code=True,
             )
         except Exception as exc:
             logger.error(
