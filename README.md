@@ -165,7 +165,6 @@ hcad-rag/
 │       ├── hallucination_evaluator.py # MedHallu hallucination evaluation
 │       ├── metrics.py                 # NDCG@K, Recall@K, McNemar, citation precision
 │       └── plots.py                   # Benchmark figures rendered from results JSON
-├── dashboard/                        # Standalone HTML mock dashboard (zero dependencies)
 └── results/
     ├── figures/                       # Benchmark charts
     └── tables/                        # Summary metrics & logs
