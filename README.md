@@ -134,6 +134,8 @@ hcad-rag/
 │   ├── config.py                      # Global configurations, model weights & paths
 │   ├── main.py                        # CLI entry point
 │   ├── wandb_tracking.py              # Shared W&B helpers (auto-enabled when configured)
+│   ├── api/
+│   │   └── server.py                   # FastAPI workbench API (`python src/main.py serve`)
 │   ├── data/
 │   │   ├── download_datasets.py       # Dataset fetchers (PrimeKG, MedHallu)
 │   │   ├── build_knowledge_graph.py   # PrimeKG MultiDiGraph & index construction
@@ -163,7 +165,7 @@ hcad-rag/
 │       ├── hallucination_evaluator.py # MedHallu hallucination evaluation
 │       ├── metrics.py                 # NDCG@K, Recall@K, McNemar, citation precision
 │       └── plots.py                   # Benchmark figures rendered from results JSON
-├── workbench/                         # Next.js clinical intelligence dashboard (see workbench/README.md)
+├── dashboard/                        # Standalone HTML mock dashboard (zero dependencies)
 └── results/
     ├── figures/                       # Benchmark charts
     └── tables/                        # Summary metrics & logs

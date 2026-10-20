@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TRIAGE - Clinical Gated Evidence Workbench</title>
+<style>
+:root{--bg:#070A10;--bg2:#0B0F19;--glass:rgba(15,23,42,.5);--line:rgba(30,41,59,.8);--teal:#00F2FE;--green:#10B981;--amber:#F59E0B;--red:#EF4444;--txt:#E2E8F0;--mut:#64748B;--mono:'JetBrains Mono',ui-monospace,Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(1200px 600px at 70% -10%,rgba(0,242,254,.07),transparent),radial-gradient(900px 500px at 10% 110%,rgba(239,68,68,.05),transparent),linear-gradient(180deg,var(--bg),var(--bg2));color:var(--txt);font-family:Inter,system-ui,sans-serif;min-height:100vh}
+.wrap{max-width:1440px;margin:0 auto;padding:20px 24px}
+.panel{background:var(--glass);backdrop-filter:blur(20px);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+h2{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin-bottom:12px}
+.mono{font-family:var(--mono)}
+header{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:10px 0 20px}
+.logo{display:flex;align-items:center;gap:10px}
+.logo svg{filter:drop-shadow(0 0 8px rgba(0,242,254,.8))}
+.logo b{font-size:24px;letter-spacing:.06em}
+.logo small{display:block;color:var(--mut);font-size:11px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;border:1px solid var(--line);background:rgba(2,6,23,.6);font-size:11.5px;font-family:var(--mono)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px currentColor;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}
+@media(max-width:1000px){.g2,.g3{grid-template-columns:1fr}}
+textarea{width:100%;min-height:74px;background:rgba(2,6,23,.7);border:1px solid var(--line);border-radius:12px;color:var(--txt);padding:12px;font-size:14px;resize:vertical}
+.chip{display:inline-block;padding:3px 10px;border-radius:99px;font-size:11px;font-family:var(--mono);margin:4px 6px 0 0;border:1px solid}
+.c-drug{color:#60A5FA;border-color:#60A5FA55;background:#60A5FA14}.c-dis{color:#F87171;border-color:#F8717155;background:#F8717114}.c-gene{color:#C084FC;border-color:#C084FC55;background:#C084FC14}.c-phen{color:#34D399;border-color:#34D39955;background:#34D39914}
+button{cursor:pointer;font-family:var(--mono);font-size:12.5px;padding:10px 18px;border-radius:10px;border:1px solid var(--teal);background:rgba(0,242,254,.08);color:var(--teal);transition:.2s}
+button:hover{background:rgba(0,242,254,.18);box-shadow:0 0 18px rgba(0,242,254,.25)}
+.preset{border:1px solid var(--line);background:rgba(2,6,23,.5);color:var(--mut);font-size:11px;padding:6px 10px;border-radius:8px;margin:4px 6px 0 0}
+.preset:hover{color:var(--txt);border-color:var(--teal)}
+.slider{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:12px}
+.slider label{width:150px;color:var(--mut);font-family:var(--mono)}
+.slider output{width:52px;text-align:right;color:var(--teal);font-family:var(--mono)}
+input[type=range]{flex:1;accent-color:var(--teal)}
+.mode{display:flex;gap:8px;flex-wrap:wrap}
+.mode button{border-color:var(--line);color:var(--mut);background:rgba(2,6,23,.5)}
+.mode button.on{border-color:var(--green);color:var(--green);background:rgba(16,185,129,.12)}
+.funnel{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+@media(max-width:900px){.funnel{grid-template-columns:1fr}}
+.stage{border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(2,6,23,.45)}
+.stage h3{font-size:11px;color:var(--mut);letter-spacing:.1em;margin-bottom:8px}
+.cand{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:8px;margin:4px 0;font-size:11.5px;font-family:var(--mono);border-left:3px solid}
+.ok{border-color:var(--green);background:rgba(16,185,129,.07)}.mid{border-color:var(--amber);background:rgba(245,158,11,.07)}.bad{border-color:var(--red);background:rgba(239,68,68,.07)}
+.tag{font-size:9.5px;padding:2px 7px;border-radius:6px}
+.gauge{height:8px;border-radius:6px;background:rgba(30,41,59,.6);overflow:hidden;margin:6px 0}
+.gauge i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--green));transition:width 1s}
+.state{margin-top:10px;padding:10px;border-radius:10px;font-family:var(--mono);font-size:12px;text-align:center;animation:pulse 2.4s infinite}
+.pass{border:1px solid var(--green);color:var(--green);background:rgba(16,185,129,.08)}
+.abst{border:1px solid var(--red);color:var(--red);background:rgba(239,68,68,.08)}
+.arena{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+@media(max-width:1000px){.arena{grid-template-columns:1fr}}
+.col{border-top:3px solid var(--mut)}
+.col.triage{border-top-color:var(--teal)}
+.col h3{font-size:13px;margin-bottom:8px}
+.col .body{font-size:12.5px;line-height:1.65;color:#CBD5E1;max-height:280px;overflow:auto;padding-right:6px}
+.pill{display:inline-block;background:rgba(0,242,254,.1);border:1px solid rgba(0,242,254,.4);color:var(--teal);border-radius:6px;padding:1px 7px;font-size:10px;font-family:var(--mono);cursor:pointer;margin:2px}
+.flyout{position:fixed;inset:auto 24px 24px auto;width:340px;background:rgba(2,6,23,.92);border:1px solid var(--teal);border-radius:12px;padding:14px;font-size:12px;display:none;z-index:9;box-shadow:0 0 40px rgba(0,242,254,.2)}
+footer{margin-top:14px;color:var(--mut);font-size:11px;font-family:var(--mono);text-align:center}
+svg text{font-family:var(--mono)}
+</style></head><body><div class="wrap">
+<header>
+<div class="logo"><svg width="34" height="34" viewBox="0 0 40 40"><polyline points="2,20 12,20 16,8 22,32 26,20 38,20" fill="none" stroke="#00F2FE" stroke-width="2.4" stroke-linecap="round"/></svg><div><b>TRIAGE</b><small>Gated Evidence Selection &amp; Context Decoupling</small></div></div>
+<span class="badge"><i class="dot"></i>Gate Status: ARMED</span>
+<span class="badge">Substrate: PrimeKG · 129,262 nodes</span>
+<span class="badge">Engine: llama-3.2-11b (NIM)</span>
+<span class="badge" id="abstBadge">Abstention Rate: <b style="color:var(--teal)">18.4%</b></span>
+</header>
+
+<div class="grid g2">
+<div class="panel"><h2>Clinical Intake</h2>
+<textarea id="q">Can Metformin be given to patients with severe renal failure given lactic acidosis risk?</textarea>
+<div id="chips"></div>
+<div>
+<span class="preset" onclick="setQ('Can Metformin be given to patients with severe renal failure given lactic acidosis risk?')">Metformin + CKD</span>
+<span class="preset" onclick="setQ('Parkinson disease motor tremor: levodopa vs subthalamic nucleus DBS?')">PD: Levodopa vs DBS</span>
+<span class="preset" onclick="setQ('SERPINA6 variant impact on prednisolone pharmacokinetics?')">SERPINA6 / Prednisolone</span>
+</div>
+<div style="margin-top:12px"><button onclick="run()">RUN TRIAGE</button></div></div>
+<div class="panel"><h2>Gate Configuration</h2>
+<div class="slider"><label>tau (entropy)</label><input type="range" id="tau" min="5" max="60" value="25"><output id="tauO">0.25</output></div>
+<div class="slider"><label>alpha (ortho)</label><input type="range" id="alpha" min="0" max="100" value="70"><output id="alphaO">0.70</output></div>
+<div class="slider"><label>word budget</label><input type="range" id="budget" min="250" max="1000" step="50" value="350"><output id="budgetO">350</output></div>
+<div class="mode" id="modes"></div></div></div>
+
+<div class="panel" style="margin-top:16px"><h2>Triage Room - Evidence Flow</h2>
+<div class="funnel">
+<div class="stage"><h3>STAGE 1 - RAW CANDIDATES (K=20)</h3><div id="raw" class="mono"></div></div>
+<div class="stage"><h3>STAGE 2 - ORTHOGONAL DECOUPLING</h3><div class="mono" style="font-size:12px;color:var(--mut);line-height:2" id="dec"></div>
+<div class="gauge"><i id="decBar" style="width:62%"></i></div><div class="mono" style="font-size:11px;color:var(--mut)">Soft Gram-Schmidt: duplicate clinical vectors cancelled into E / R / M sub-channels</div></div>
+<div class="stage"><h3>STAGE 3 - DUAL DECISION GATE</h3>
+<div class="mono" style="font-size:12px;color:var(--mut)">JEV score <b id="jev" style="color:var(--green)">0.82</b> &middot; entropy delta <b style="color:var(--amber)">-0.11</b></div>
+<div class="gauge"><i id="gateBar" style="width:82%"></i></div>
+<div class="state pass" id="state">PASS - SYNTHESIZE WITH CITED EVIDENCE</div></div>
+</div></div>
+
+<div class="panel" style="margin-top:16px"><h2>Three-Way Clinical Arena</h2>
+<div class="arena" id="arena"></div></div>
+
+<div class="grid g2" style="margin-top:16px">
+<div class="panel"><h2>Knowledge Subgraph (2-hop, PrimeKG)</h2><canvas id="graph" width="640" height="330" style="width:100%"></canvas></div>
+<div class="panel"><h2>Benchmark Telemetry</h2>
+<svg id="radar" width="300" height="240" viewBox="0 0 300 240" style="float:left"></svg>
+<div style="float:right;width:52%">
+<h2 style="font-size:11px">8-Criteria Win-Rate vs Vanilla RAG</h2><div id="bars" class="mono" style="font-size:10.5px"></div>
+<div class="badge" style="margin-top:10px;border-color:var(--green)">McNemar p &lt; 0.001 &middot; SIGNIFICANT</div></div>
+<div style="clear:both"></div></div></div>
+<footer>TRIAGE workbench &middot; standalone mode (mock telemetry) &middot; API-ready: /api/triage/query &middot; /api/triage/subgraph &middot; /api/triage/benchmark</footer>
+</div><div class="flyout" id="fly"></div>
+<script>
+const ENT=[["Metformin","drug"],["Renal Failure","dis"],["Lactic Acidosis","dis"],["eGFR","phen"],["OCT2","gene"]];
+const MODES=["Strict Gating (Recommended)","Lenient Screening","Stress Test / Adversarial"];let mode=0;
+const CANDS=[["Metformin contraindication Renal Failure",".86","ok","ADMIT"],["Metformin drug_effect Lactic Acidosis",".83","ok","ADMIT"],["Metformin indication T2DM",".79","ok","ADMIT"],["Metformin carrier OCT2",".64","mid","OBSERVE"],["Phenformin causes Lactic Acidosis",".58","mid","OBSERVE"],["CRABP2 carrier retinoid",".21","bad","DISMISS"],["Mycophenolate CYP3A5",".19","bad","DISMISS"],["Sunitinib CYP3A4",".17","bad","DISMISS"]];
+const FLY={"PrimeKG:#8921":"Metformin --[contraindication]--> Renal Failure (eGFR<30). Source: PrimeKG relation contraindication, confidence 0.94.","PrimeKG:#5421":"Metformin --[drug_effect]--> Lactic Acidosis. Accumulation in renal impairment raises lactate risk.","PMC:5421":"KDOQI 2020: avoid metformin at GFR<30 mL/min unless necessary with monitoring."};
+function setQ(t){document.getElementById("q").value=t}
+document.querySelectorAll("input[type=range]").forEach(r=>r.oninput=()=>{document.getElementById("tauO").textContent=(document.getElementById("tau").value/100).toFixed(2);document.getElementById("alphaO").textContent=(document.getElementById("alpha").value/100).toFixed(2);document.getElementById("budgetO").textContent=document.getElementById("budget").value;render()});
+function render(){document.getElementById("chips").innerHTML=ENT.map(e=>`<span class="chip c-${e[1]}">${e[0]}</span>`).join("");
+document.getElementById("modes").innerHTML=MODES.map((m,i)=>`<button class="${i==mode?'on':''}" onclick="mode=${i};render()">${m}</button>`).join("");
+const tau=+document.getElementById("tau").value/100,modeMult=[1,.55,.2][mode];
+document.getElementById("raw").innerHTML=CANDS.map(c=>{const s=parseFloat(c[1]),cls=s>0.7-tau*modeMult*0.3?"ok":s>0.4?"mid":"bad";return `<div class="cand ${cls}"><span>${c[0]}</span><span><span class="tag">${c[3]}</span> ${c[1]}</span></div>`}).join("");
+const admitted=CANDS.filter(c=>c[2]=="ok").length;
+document.getElementById("dec").innerHTML=`E-channel: <b style="color:#60A5FA">4</b> entity vectors<br>R-channel: <b style="color:var(--amber)">3</b> orthogonal relations<br>M-channel: <b style="color:#34D399">2</b> modifier cues<br><span style="color:var(--mut)">${8-admitted} redundant vectors cancelled (eta=0.70)</span>`;
+document.getElementById("decBar").style.width=(admitted/8*100)+"%";
+const jev=(0.86-tau*modeMult*0.4).toFixed(2);document.getElementById("jev").textContent=jev;
+const pass=jev>0.45;const st=document.getElementById("state");
+st.className="state "+(pass?"pass":"abst");st.textContent=pass?"PASS - SYNTHESIZE WITH CITED EVIDENCE":"ABSTAIN - SUPPRESS RETRIEVED DISTRACTORS / PARAMETRIC MODE";
+document.getElementById("gateBar").style.width=(jev*100)+"%";document.getElementById("abstBadge").innerHTML=`Abstention Rate: <b style="color:var(--teal)">${(mode*7+11.4+tau*20).toFixed(1)}%</b>`;
+arena(pass)}
+function arena(pass){const cols=[
+["Baseline LLM (parametric)","<span style='color:var(--red)'>[!] Ungrounded dosing risk:</span> common answer suggests 500mg start without renal adjustment. No source cited.",
+["Vanilla Vector-RAG (top-K)","Retrieved: <span class='pill'>CRABP2 retinoid carrier</span> <span class='pill'>Mycophenolate CYP3A5</span> - <span style='color:var(--red)'>irrelevant distractors dominate the context window</span>; fragmented sentences, no clinical reasoning.",
+["TRIAGE (ours)",pass?"Metformin is avoided at eGFR &lt; 30 mL/min due to lactic acidosis risk <span class='pill' onclick='fly(\"PrimeKG:#8921\")'>PrimeKG:#8921</span> <span class='pill' onclick='fly(\"PMC:5421\")'>PMC:5421</span>. If used: monitor renal function, lactate; consider alternatives <span class='pill' onclick='fly(\"PrimeKG:#5421\")'>PrimeKG:#5421</span>.":"<span style='color:var(--red)'>ABSTAIN triggered:</span> retrieved evidence failed the gate. Relying on parametric clinical knowledge only."]];
+document.getElementById("arena").innerHTML=cols.map((c,i)=>`<div class="col panel ${i==2?'triage':''}"><h3>${c[0]}</h3><div class="body">${c[1]}</div></div>`).join("")}
+function fly(id){const f=document.getElementById("fly");f.style.display="block";f.innerHTML=`<b style="color:var(--teal)">${id}</b><br><br>${FLY[id]}<br><button style="margin-top:10px" onclick="document.getElementById('fly').style.display='none'">close</button>`}
+document.getElementById("fly").onclick=e=>{if(e.target.id==="fly")e.target.style.display="none"};
+function run(){render()}
+function radar(){const L=["Accuracy","Faithfulness","Contra-","Halluc.","Compl."],V=[88,92,85,89,84],n=5,cx=150,cy=120,R=88;let s="";
+for(let ring=1;ring<=4;ring++){let p="";for(let i=0;i<n;i++){const a=-Math.PI/2+i*2*Math.PI/n;p+=`${cx+Math.cos(a)*R*ring/4},${cy+Math.sin(a)*R*ring/4} `}s+=`<polygon points="${p}" fill="none" stroke="rgba(30,41,59,.8)"/>`}
+let pts="";for(let i=0;i<n;i++){const a=-Math.PI/2+i*2*Math.PI/n,r=R*V[i]/100;pts+=`${cx+Math.cos(a)*r},${cy+Math.sin(a)*r} `;s+=`<text x="${cx+Math.cos(a)*(R+18)}" y="${cy+Math.sin(a)*(R+18)+3}" fill="#64748B" font-size="9" text-anchor="middle">${L[i]}</text>`}
+s+=`<polygon points="${pts}" fill="rgba(0,242,254,.15)" stroke="#00F2FE" stroke-width="1.6"/>`;
+document.getElementById("radar").innerHTML=s}
+function bars(){const W={Comprehensiveness:61.9,Empowerment:66.7,Accuracy:57.1,Relevance:52.4,Coherence:71.4,Clarity:66.7,Logical:61.9,Flexibility:47.6};
+document.getElementById("bars").innerHTML=Object.entries(W).map(([k,v])=>`<div style="margin:4px 0">${k}<div class="gauge"><i style="width:${v}%;background:${v>60?'var(--green)':'var(--amber)'}"></i></div><span style="color:var(--mut)">${v}%</span></div>`).join("")}
+function graph(){const c=document.getElementById("graph"),x=c.getContext("2d");const N=[{n:"Metformin",t:"drug",x:150,y:160},{n:"Renal Failure",t:"dis",x:330,y:90},{n:"Lactic Acidosis",t:"dis",x:330,y:230},{n:"OCT2",t:"gene",x:480,y:160},{n:"T2DM",t:"dis",x:150,y:60},{n:"eGFR<30",t:"phen",x:480,y:60}];
+const E=[[0,1,"contraindication","red"],[0,2,"drug_effect","red"],[0,4,"indication","teal"],[0,3,"carrier","violet"],[1,5,"phenotype","green"]];
+x.clearRect(0,0,c.width,c.height);E.forEach(e=>{const a=N[e[0]],b=N[e[1]];x.strokeStyle=e[3]=="red"?"#EF4444":e[3]=="teal"?"#00F2FE":e[3]=="violet"?"#A78BFA":"#10B981";x.globalAlpha=.6;x.beginPath();x.moveTo(a.x,a.y);x.lineTo(b.x,b.y);x.stroke();x.globalAlpha=1});
+N.forEach(n=>{const col=n.t=="drug"?"#60A5FA":n.t=="dis"?"#F87171":n.t=="gene"?"#C084FC":"#34D399";x.fillStyle=col;x.shadowColor=col;x.shadowBlur=12;x.beginPath();x.arc(n.x,n.y,9,0,7);x.fill();x.shadowBlur=0;x.fillStyle="#CBD5E1";x.font="10px JetBrains Mono";x.textAlign="center";x.fillText(n.n,n.x,n.y-15)});
+x.fillStyle="#64748B";x.font="9px JetBrains Mono";E.forEach(e=>{const a=N[e[0]],b=N[e[1]];x.fillText(e[2],(a.x+b.x)/2,(a.y+b.y)/2-4)})}
+radar();bars();graph();render();
+</script></body></html>
