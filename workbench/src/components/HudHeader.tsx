@@ -20,7 +20,6 @@ export function TriageLogo() {
 }
 
 export function HudHeader() {
-  const query = useWorkbench((s) => s.query);
   const setQuery = useWorkbench((s) => s.setQuery);
   const result = useWorkbench((s) => s.result);
   const abstentionRate = result?.abstentionRate ?? 18.4;
@@ -58,7 +57,6 @@ export function HudHeader() {
           </button>
         ))}
       </div>
-      <span className="sr-only">{query}</span>
     </header>
   );
 }

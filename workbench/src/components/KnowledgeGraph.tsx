@@ -7,10 +7,7 @@ import {
   MarkerType,
   Position,
   ReactFlow,
-  type Edge,
   type Node,
-  useEdgesState,
-  useNodesState,
 } from "@xyflow/react";
 import { motion } from "framer-motion";
 import { useEffect, useMemo } from "react";
@@ -88,9 +85,6 @@ export function KnowledgeGraph() {
   const selectNode = useWorkbench((s) => s.selectNode);
   const phase = useWorkbench((s) => s.phase);
 
-  const [nodes, , onNodesChange] = useNodesState<Node>([]);
-  const [edges, , onEdgesChange] = useEdgesState<Edge>([]);
-
   useEffect(() => {
     if (!subgraph) return;
     selectNode(null);
@@ -158,10 +152,8 @@ export function KnowledgeGraph() {
       <div className="h-[320px] rounded-xl border border-slate-800/60 bg-slate-950/40 overflow-hidden">
         {subgraph ? (
           <ReactFlow
-            nodes={viewNodes.length ? viewNodes : nodes}
-            edges={viewEdges.length ? viewEdges : edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
+            nodes={viewNodes}
+            edges={viewEdges}
             nodeTypes={nodeTypes}
             onNodeClick={(_, node) =>
               selectNode(selectedNode === node.id ? null : node.id)

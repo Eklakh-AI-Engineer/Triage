@@ -79,7 +79,14 @@ body {
   --xy-edge-stroke-default: rgba(100, 116, 139, 0.6);
 }
 .react-flow__attribution {
-  display: none;
+  background: rgba(2, 6, 23, 0.7) !important;
+  color: #475569;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  border-radius: 6px;
+}
+.react-flow__attribution a {
+  color: #64748b;
 }
 .react-flow__edge-text {
   font-family: var(--font-mono);

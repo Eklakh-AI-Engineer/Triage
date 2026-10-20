@@ -41,9 +41,20 @@ interface WorkbenchState {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const INITIAL_QUERY =
+  "Can Metformin be given to patients with severe renal failure given lactic acidosis risk?";
+
+function liveEntitiesFor(query: string): Entity[] {
+  return extractEntities(query).map((e, i) => ({
+    id: `live-${i}-${e.name}`,
+    name: e.name,
+    type: e.type,
+    confidence: 0.8,
+  }));
+}
+
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
-  query:
-    "Can Metformin be given to patients with severe renal failure given lactic acidosis risk?",
+  query: INITIAL_QUERY,
   config: DEFAULT_CONFIG,
   status: "idle",
   phase: "idle",
@@ -53,19 +64,10 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   selectedCitation: null,
   selectedNode: null,
   error: null,
-  liveEntities: [],
+  liveEntities: liveEntitiesFor(INITIAL_QUERY),
 
   setQuery: (q) => {
-    set({ query: q });
-    const found = extractEntities(q);
-    set({
-      liveEntities: found.map((e, i) => ({
-        id: `live-${i}-${e.name}`,
-        name: e.name,
-        type: e.type,
-        confidence: 0.8,
-      })),
-    });
+    set({ query: q, liveEntities: liveEntitiesFor(q) });
   },
 
   setConfig: (patch) =>
