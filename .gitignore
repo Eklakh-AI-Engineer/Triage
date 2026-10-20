@@ -30,6 +30,8 @@ results/tables/*.json
 *.lot
 .tempmediaStorage/
 *.ipynb
+# deploy notebooks are real artifacts, not outputs
+!deploy/*.ipynb
 
 # OS specific
 .DS_Store
