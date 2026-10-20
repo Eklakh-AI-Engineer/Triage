@@ -7,8 +7,13 @@ tiers (Fig.5), criteria win-rates (Fig.6), latency-performance trade-off
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+# Must be set BEFORE importing matplotlib: the import itself validates
+# MPLBACKEND, and inherited values like 'module://matplotlib_inline...' from
+# notebook kernels crash on machines where that backend is unavailable.
+os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

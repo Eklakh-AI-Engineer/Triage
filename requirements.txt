@@ -1,8 +1,11 @@
 # HCAD-RAG pinned environment (Python 3.12 tested)
 torch>=2.1
 sentence-transformers>=2.7,<4.0
-spacy>=3.8
-thinc>=8.3  # numpy 2.x ABI compatible build required
+# spacy/thinc pinned to the tested pair: spacy 3.8.12+ rejects the 0.5.4 NER
+# model configs ('True' string where a bool is expected), silently dropping
+# scispacy NER to regex fallback. 3.8.11 + thinc 8.3.11 load them (verified).
+spacy==3.8.11
+thinc==8.3.11  # numpy 2.x ABI compatible build required
 scispacy>=0.6,<0.7
 faiss-cpu>=1.7.4
 transformers>=4.40,<5.0
