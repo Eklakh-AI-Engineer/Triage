@@ -206,6 +206,10 @@ Examples:
     p_eval = subparsers.add_parser(
         "evaluate", help="Alias of base-paper: run the paper-protocol benchmark")
     p_eval.add_argument(
+        "--question-pool", choices=["test", "dev"], default="test",
+        help="Question pool: test (held-out evaluation) or dev (training/tuning)",
+    )
+    p_eval.add_argument(
         "--samples", type=int, default=50,
         help="Number of paper-protocol questions ",
     )
@@ -214,6 +218,10 @@ Examples:
     # benchmark
     p_bench = subparsers.add_parser(
         "benchmark", help="Alias of base-paper: full 3-way comparison (Baseline vs Vanilla RAG vs HCAD-RAG)")
+    p_bench.add_argument(
+        "--question-pool", choices=["test", "dev"], default="test",
+        help="Question pool: test (held-out evaluation) or dev (training/tuning)",
+    )
     p_bench.add_argument(
         "--samples", type=int, default=50,
         help="Number of paper-protocol questions ",
@@ -225,6 +233,10 @@ Examples:
         "base-paper", help="Run the base-paper protocol benchmark (scoring + selection + latency)",
     )
     p_bp.add_argument(
+        "--question-pool", choices=["test", "dev"], default="test",
+        help="Question pool: test (held-out evaluation) or dev (training/tuning)",
+    )
+    p_bp.add_argument(
         "--samples", type=int, default=50,
         help="Number of paper-protocol questions ",
     )
@@ -233,6 +245,12 @@ Examples:
     p_bp.set_defaults(func=cmd_base_paper)
 
     # save-pipeline
+    p_tt = subparsers.add_parser(
+        "train-tensor", help="Train the query-adaptive anisotropic tensor on the DEV question pool")
+    p_tt.add_argument("--samples", type=int, default=60,
+                      help="Number of dev-pool questions to train on")
+    p_tt.add_argument("--epochs", type=int, default=3)
+    p_tt.add_argument("--lr", type=float, default=1e-3)
     p_save = subparsers.add_parser("save-pipeline", help="Serialize entire HCAD-RAG pipeline to bundle")
     p_save.add_argument(
         "--output-dir", type=str, default="models/hcad_pipeline_v1",
@@ -242,6 +260,7 @@ Examples:
         "--file", type=str, default="models/hcad_rag_model.joblib",
         help="Target joblib model artifact file path",
     )
+    p_tt.set_defaults(func=cmd_train_tensor)
     p_save.set_defaults(func=cmd_save_pipeline)
 
     # serve (workbench API)
@@ -265,13 +284,13 @@ def cmd_evaluate(args):
     """Alias of base-paper: the benchmark evaluates all three systems."""
     from src.evaluation.run_base_paper_benchmark import run_benchmark
     logger.info("Evaluating system %s (%d samples)...", args.system, args.samples)
-    run_benchmark(num_samples=args.samples)
+    run_benchmark(num_samples=args.samples, question_pool=args.question_pool)
 
 def cmd_benchmark(args):
     """Run full 3-way benchmark comparison (Baseline vs Vanilla RAG vs HCAD-RAG)."""
     from src.evaluation.run_base_paper_benchmark import run_benchmark
     logger.info("Running full 3-way benchmark (%d samples per system)...", args.samples)
-    run_benchmark(num_samples=args.samples)
+    run_benchmark(num_samples=args.samples, question_pool=args.question_pool)
 
 def cmd_base_paper(args):
     """Run the base-paper (Hyper-RAG, arXiv:2504.08758) evaluation protocol."""
@@ -281,13 +300,25 @@ def cmd_base_paper(args):
         import src.config as _cfg
         _cfg.WANDB_MODE = "disabled"
     from src.evaluation.run_base_paper_benchmark import run_benchmark
-    results = run_benchmark(num_samples=args.samples)
+    results = run_benchmark(num_samples=args.samples, question_pool=args.question_pool)
     if getattr(args, "plot", False) and results:
         from src.evaluation.plots import plot_all
         from pathlib import Path as _P
         paths = plot_all(results, hallu_path=_P("results/tables/hallucination_hcad-rag.json"))
         for p_ in paths:
             logger.info("Figure saved: %s", p_)
+
+def cmd_train_tensor(args):
+    """Train the dynamic anisotropic tensor on dev-pool questions (leakage-safe)."""
+    from src.core.hcad_retriever import HCADRetriever
+    from src.core.tensor_trainer import train_tensor
+    from src.evaluation.run_base_paper_benchmark import generate_paper_protocol_questions
+
+    logger.info("Generating/loading DEV question pool (%d questions)...", args.samples)
+    questions = generate_paper_protocol_questions(args.samples, pool="dev")
+    retriever = HCADRetriever()
+    result = train_tensor(retriever, questions, epochs=args.epochs, lr=args.lr)
+    logger.info("Tensor training complete: %s", result)
 
 def cmd_save_pipeline(args):
     """Serialize the entire HCAD-RAG pipeline into a joblib model artifact."""

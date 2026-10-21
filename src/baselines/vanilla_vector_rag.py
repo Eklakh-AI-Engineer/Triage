@@ -10,6 +10,7 @@ from src.config import (
     CHROMA_DISTANCE_METRIC,
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL_NAME,
+    EVIDENCE_WORD_BUDGET,
     LLM_MAX_TOKENS,
     LLM_MODEL,
     LLM_SYSTEM_PROMPT,
@@ -202,10 +203,31 @@ class VanillaVectorRAG:
         if not contexts:
             return query
 
-        context_block = "\n\n---\n\n".join(
-            f"[Context {i+1}] (similarity={ctx['score']:.4f})\n{ctx['text']}"
-            for i, ctx in enumerate(contexts)
-        )
+        # Fairness: both systems operate under the same evidence word budget
+        # (EVIDENCE_WORD_BUDGET). Without this, vanilla's generator receives
+        # the full text of its top-K passages (thousands of words for PMC
+        # chunks) while HCAD's decision gate enforces a structured token
+        # economy, so answer-length differences would reflect the evidence
+        # BUDGET rather than evidence SELECTION - the actual hypothesis.
+        # Clipping follows the same sentence-boundary rule as the benchmark's
+        # judge-side formatter (mid-sentence clipping can sever negations).
+        context_parts = []
+        remaining_words = EVIDENCE_WORD_BUDGET
+        for i, ctx in enumerate(contexts, 1):
+            if remaining_words <= 0:
+                break
+            words = str(ctx.get("text", "")).split()
+            if not words:
+                continue
+            budget_text = " ".join(words[:remaining_words])
+            cut = max(budget_text.rfind(". "), budget_text.rfind("! "),
+                      budget_text.rfind("? "))
+            selected = budget_text if cut == -1 else budget_text[: cut + 1]
+            context_parts.append(
+                f"[Context {i}] (similarity={ctx['score']:.4f})\n{selected.strip()}"
+            )
+            remaining_words -= len(selected.split())
+        context_block = "\n\n---\n\n".join(context_parts)
 
         prompt = (
             f"Clinical Query:\n{query}\n\n"

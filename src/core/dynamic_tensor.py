@@ -22,6 +22,10 @@ class QueryAdaptiveAnisotropicTensor(nn.Module):
             nn.LayerNorm(hidden), nn.Linear(hidden, embed_dim), nn.Softplus(),
         )
         self.component_head = nn.Linear(hidden, 3)  # a(Q) over {E, R, M}
+        # adapter[:3] is (Linear -> GELU -> LayerNorm): the hidden state for
+        # the component head. (adapter[:-1] also included the output Linear,
+        # feeding a d-dim vector into the 3-way head - crashed at runtime.)
+        self._backbone = nn.Sequential(*list(self.adapter)[:3])
 
     def forward(self, Q: torch.Tensor, graph_feats: torch.Tensor):
         """Q: (3, d) HCAD matrix; graph_feats: (feat_dim,) normalized stats.
@@ -29,7 +33,7 @@ class QueryAdaptiveAnisotropicTensor(nn.Module):
         Returns (lambda, a): lambda in R^d with sum == 1; a is a 3-simplex.
         """
         z = torch.cat([Q.mean(dim=0), graph_feats], dim=-1)
-        h = self.adapter[:-1](z)                # through LayerNorm
+        h = self._backbone(z)                    # through LayerNorm
         lam = self.adapter(z) + 1e-5
         lam = lam / lam.sum()                   # sum of lambda = 1, always
         a = torch.softmax(self.component_head(h), dim=-1)
@@ -55,3 +59,26 @@ def make_query_features(
              [degree_norm, mean_conf, idf_sq, negation_flag, urgency_flag]]
     feats = stats + list(type_histogram) + list(relation_onehot)
     return torch.tensor(feats, dtype=torch.float32)
+
+
+def save_tensor(model: "QueryAdaptiveAnisotropicTensor", path=None) -> str:
+    """Persist the trained hypernetwork (only trainable weights)."""
+    import torch
+    from src.config import TENSOR_MODEL_PATH
+    path = path or TENSOR_MODEL_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), path)
+    return str(path)
+
+
+def load_tensor(path=None) -> "QueryAdaptiveAnisotropicTensor":
+    """Load a trained hypernetwork; raises if no checkpoint exists."""
+    import torch
+    from src.config import TENSOR_MODEL_PATH
+    path = path or TENSOR_MODEL_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"No trained tensor at {path}")
+    model = QueryAdaptiveAnisotropicTensor()
+    model.load_state_dict(torch.load(path, map_location="cpu"))
+    model.eval()
+    return model

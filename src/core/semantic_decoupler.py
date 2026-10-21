@@ -130,8 +130,8 @@ class SemanticDecoupler:
     def _get_ner(self):
         """Lazily import and instantiate NER extractor."""
         if self._ner is None:
-            from src.core.ner_extractor import BiomedicalNER
-            self._ner = BiomedicalNER(lazy=True)
+            from src.core.ner_extractor import get_biomedical_ner
+            self._ner = get_biomedical_ner(lazy=True)
         return self._ner
 
     def _get_rex(self):

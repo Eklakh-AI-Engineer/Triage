@@ -307,20 +307,118 @@ QUESTION_GEN_PROMPT = (
     "{tier}\n"
     "Return ONLY the question text.\n\nPassage:\n{chunk}"
 )
+QUESTION_GEN_PROMPT_ASSOC = (
+    "You are given a single factual statement from a biomedical knowledge graph "
+    "describing one association (for example, between a drug and a protein, a "
+    "disease and a phenotype, or two drugs). Generate one examination-style, "
+    "open-ended question that this statement fully answers.\n"
+    "Rules: ask only about what the statement itself supports; do NOT ask about "
+    "mechanisms, processes, or clinical management that the statement does not "
+    "describe. Any follow-up aspect must remain answerable from the statement.\n"
+    "{tier}\n"
+    "Return ONLY the question text.\n\nStatement:\n{chunk}"
+)
 TIERS = {
     1: "Ask a single focused question.",
     2: "Ask a two-stage question: first one aspect, then 'and specifically' a second, dependent aspect.",
     3: "Ask a three-stage nested question chaining three dependent aspects with connecting phrases.",
 }
 
-def generate_paper_protocol_questions(num_samples: int, generator=None) -> list[dict]:
+# Stratified sampling: question sources are drawn across these PrimeKG relation
+# types plus the PMC clinical-text corpus, instead of the first N documents of
+# the vector store (which are all contiguous PrimeKG drug_protein triples -
+# the root cause of the degenerate 8-fact pilot question set).
+TRIPLE_RELATION_STRATA = [
+    "drug_protein", "contraindication", "indication", "drug_drug",
+    "disease_protein", "biomarker", "phenotype_protein",
+    "disease_phenotype_positive", "protein_protein", "cause",
+    "disease_disease", "carries", "off-label use", "pathway_protein",
+    "disease_phenotype_negative",
+]
+
+def _question_pool_of(doc_id: str, pool: str) -> bool:
+    """Deterministic dev/test pool assignment by document id hash.
+
+    Keeps the question pool used to train/tune HCAD components strictly
+    disjoint from the held-out evaluation pool (no data leakage).
+    """
+    import hashlib
+    h = int(hashlib.sha1(str(doc_id).encode("utf-8")).hexdigest()[:8], 16)
+    want = 0 if pool == "test" else 1
+    return h % 2 == want
+
+def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[dict]:
+    """Fetch candidate source chunks stratified by corpus segment.
+
+    PMC clinical-text chunks and each PrimeKG relation type form separate
+    strata; within a stratum a seeded random window is drawn so questions do
+    not all come from the head of the store. Chunks are deduplicated per
+    entity (head_name) / article (doc_id) so a single drug cannot dominate,
+    and filtered to the requested dev/test pool.
+    """
+    strata = [{"where": {"source": "pmc"}, "kind": "pmc"}]
+    strata += [{"where": {"relation": rel}, "kind": "primekg"} for rel in TRIPLE_RELATION_STRATA]
+    per = max(6, (num_docs * 3) // len(strata) + 4)
+    total = collection.count()
+    out: list[dict] = []
+    for s in strata:
+        got = None
+        # Geometrically shrinking random offsets: guarantees a window inside
+        # even small strata by the last attempt (offset 0).
+        span = max(1, total - per)
+        for _ in range(4):
+            offset = rng.randrange(0, span)
+            try:
+                got = collection.get(where=s["where"], limit=per, offset=offset,
+                                     include=["documents", "metadatas", "ids"])
+            except TypeError:
+                # chroma build without offset kwarg: fall back to head window
+                got = collection.get(where=s["where"], limit=per,
+                                     include=["documents", "metadatas", "ids"])
+                break
+            if got.get("documents"):
+                break
+            span = max(1, span // 4)
+        if not got or not got.get("documents"):
+            continue
+        docs = got["documents"]
+        metas = got.get("metadatas") or [{}] * len(docs)
+        ids = got.get("ids") or [str(i) for i in range(len(docs))]
+        seen: set[str] = set()
+        for d, m, i in zip(docs, metas, ids):
+            if not d or len(d) < 30:
+                continue
+            if s["kind"] == "pmc" and len(d) < 200:
+                continue
+            if s["kind"] == "primekg" and len(d) > 300:
+                continue
+            key = str(m.get("doc_id") or m.get("head_name") or i)
+            if key in seen:
+                continue
+            if not _question_pool_of(i, pool):
+                continue
+            seen.add(key)
+            out.append({"doc": d, "id": str(i), "kind": s["kind"],
+                        "relation": str(m.get("relation") or "")})
+    rng.shuffle(out)
+    return out
+
+def generate_paper_protocol_questions(num_samples: int, generator=None,
+                                      pool: str = "test") -> list[dict]:
     """Base-paper protocol (Sec. 3.5): questions are GENERATED from source
     chunks by an LLM, and the SOURCE CHUNK is the scoring reference.
 
-    Difficulty tiers follow Sec. 1.2: 1/2/3-stage nested questions. This
-    replaces hand-curated cases with the exact protocol the paper uses.
+    Fairness properties:
+    - chunks are drawn stratified across PMC text and PrimeKG relation types
+      (not the head of the store), deduplicated per entity/article;
+    - each question comes from a DISTINCT chunk (tiers get disjoint slices -
+      previously every tier rephrased the same 8 facts);
+    - chunks are assigned to the dev or test pool by id hash, so training/
+      tuning on the dev pool can never leak into the evaluation pool;
+    - questions from short KG-triple statements use an association-style
+      prompt that forbids asking mechanisms the statement cannot answer.
 
-    The generated set is CACHED to disk (keyed by sample count + seed).
+    The generated set is CACHED to disk (keyed by sample count, seed, pool).
     Generation samples at temperature 0.3, so without the cache a resumed
     run would produce different questions and silently discard every
     checkpointed answer. With it, interrupted runs resume exactly.
@@ -329,16 +427,32 @@ def generate_paper_protocol_questions(num_samples: int, generator=None) -> list[
     from src.data.build_vector_store import load_vector_store
     import random as _random
 
-    cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
+    if pool not in ("test", "dev"):
+        raise ValueError(f"pool must be 'test' or 'dev', got {pool!r}")
+    cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}_{pool}.json"
+    legacy_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
     if cache_path.exists():
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 cached = json.load(f)
             if cached and all("question" in s and "reference" in s for s in cached):
-                logger.info("Paper-protocol questions loaded from cache: %d.", len(cached))
+                logger.info("Paper-protocol questions loaded from cache: %d (pool=%s).",
+                            len(cached), pool)
                 return cached
         except Exception as exc:
             logger.warning("Question cache unreadable (%s); regenerating.", exc)
+    elif legacy_path.exists():
+        try:
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            if cached and all("question" in s and "reference" in s for s in cached):
+                logger.warning(
+                    "Legacy (pre-stratification) question cache used: %s. This set was "
+                    "NOT drawn stratified and may be degenerate; delete it to regenerate.",
+                    legacy_path.name)
+                return cached
+        except Exception:
+            pass
 
     if generator is None:
         generator = UnifiedLLMClient(temperature=0.3)
@@ -346,35 +460,46 @@ def generate_paper_protocol_questions(num_samples: int, generator=None) -> list[
     total = collection.count()
     if total == 0:
         raise RuntimeError("Vector store is empty - run `python src/main.py prepare` first.")
-    got = collection.get(limit=min(max(num_samples * 3, 30), total),
-                         include=["documents"])
-    docs = got.get("documents") or []
-    if not docs:
-        raise RuntimeError("No documents available for question generation.")
-    _random.Random(RANDOM_SEED).shuffle(docs)
+    rng = _random.Random(RANDOM_SEED)
+    chunks = _fetch_stratified_chunks(collection, num_samples * 2, pool, rng)
+    if len(chunks) < num_samples:
+        raise RuntimeError(
+            f"Only {len(chunks)} distinct pool-{pool} source chunks available "
+            f"for {num_samples} questions; regenerate with a different pool size."
+        )
 
+    per_tier = max(1, -(-num_samples // 3))
     samples, tier_sizes = [], {1: 0, 2: 0, 3: 0}
-    per_tier = max(1, num_samples // 3)
+    cursor = 0
     for tier in (1, 2, 3):
-        for chunk in docs:
-            if tier_sizes[tier] >= per_tier or len(samples) >= num_samples:
-                break
+        while tier_sizes[tier] < per_tier and len(samples) < num_samples:
+            if cursor >= len(chunks):
+                raise RuntimeError("Ran out of distinct source chunks during generation.")
+            chunk = chunks[cursor]
+            cursor += 1
+            prompt = (QUESTION_GEN_PROMPT if chunk["kind"] == "pmc"
+                     else QUESTION_GEN_PROMPT_ASSOC)
             try:
-                q = generator.chat([{"role": "user", "content": QUESTION_GEN_PROMPT.format(
-                    tier=TIERS[tier], chunk=chunk[:2500])}]).strip()
+                q = generator.chat([{"role": "user", "content": prompt.format(
+                    tier=TIERS[tier], chunk=chunk["doc"][:2500])}]).strip()
             except Exception:
                 continue
             if len(q) < 25:
                 continue
-            samples.append({"question": q, "reference": chunk,
+            samples.append({"question": q, "reference": chunk["doc"],
                             "ground_truth": "", "source": "paper_protocol",
-                            "difficulty_tier": tier})
+                            "difficulty_tier": tier, "pool": pool,
+                            "source_kind": chunk["kind"],
+                            "source_chunk_id": chunk["id"],
+                            "source_relation": chunk["relation"]})
             tier_sizes[tier] += 1
-    logger.info("Paper-protocol questions: %s", tier_sizes)
+    logger.info("Paper-protocol questions: %s (pool=%s, kinds=%s)", tier_sizes, pool,
+                {k: sum(1 for s in samples if s["source_kind"] == k)
+                 for k in ("pmc", "primekg")})
     try:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(samples, f, ensure_ascii=False)
+            json.dump(samples, f, ensure_ascii=False, indent=2)
         logger.info("Paper-protocol questions cached to %s (resume-safe).", cache_path)
     except Exception as exc:
         logger.warning("Could not cache questions (%s); resume will regenerate.", exc)
@@ -383,10 +508,12 @@ def generate_paper_protocol_questions(num_samples: int, generator=None) -> list[
 @tracked_run(
     name="base-paper-benchmark",
     job_type="benchmark",
-    config=lambda num_samples=10, output_path=None: {"samples": num_samples},
+    config=lambda num_samples=10, output_path=None, question_pool="test": {
+        "samples": num_samples, "question_pool": question_pool},
     log_results=log_base_paper_results,
 )
-def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
+def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
+                  question_pool: str = "test"):
     """Execute complete base paper evaluation benchmark across the 3 systems."""
     logger.info("Initializing Base Paper Evaluator...")
     evaluator = BasePaperEvaluator()
@@ -409,7 +536,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
     # chunks as references; fall back to the legacy curated loader only if
     # generation is unavailable (no LLM reachable).
     try:
-        samples = generate_paper_protocol_questions(num_samples)
+        samples = generate_paper_protocol_questions(num_samples, pool=question_pool)
         logger.info("Using paper-protocol questions (%d).", len(samples))
     except Exception as exc:
         logger.warning("Paper-protocol question generation failed (%s); "
@@ -552,6 +679,9 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
                 "question": q,
                 "source": sample.get("source", "curated"),
                 "difficulty_tier": sample.get("difficulty_tier", 1),
+                "source_kind": sample.get("source_kind", ""),
+                "source_chunk_id": sample.get("source_chunk_id", ""),
+                "question_pool": sample.get("pool", question_pool),
                 "scores": {
                     "Baseline LLM": score_base.to_dict(),
                     "Vanilla RAG": score_van.to_dict(),
@@ -699,6 +829,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None):
             "judge": {"provider": evaluator.judge.provider, "model": evaluator.judge.model},
             "prompt_mode": "zero_shot" if not __import__("src.config", fromlist=["ENABLE_FEW_SHOT"]).ENABLE_FEW_SHOT else "few_shot",
             "random_seed": RANDOM_SEED,
+            "question_pool": question_pool,
         },
         "scoring_based_assessment": final_scores,
         "scoring_by_difficulty_tier": {

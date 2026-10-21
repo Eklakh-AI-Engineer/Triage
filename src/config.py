@@ -11,6 +11,8 @@ RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 VECTORDB_DIR = DATA_DIR / "vectordb"
 RESULTS_DIR = PROJECT_ROOT / "results"
+MODELS_DIR = PROJECT_ROOT / "models"
+TENSOR_MODEL_PATH = MODELS_DIR / "dynamic_tensor.pt"
 TABLES_DIR = RESULTS_DIR / "tables"
 FIGURES_DIR = RESULTS_DIR / "figures"
 

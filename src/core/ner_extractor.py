@@ -238,6 +238,26 @@ _GENE_PATTERNS: list[str] = [
     r"|WNT|CTNNB1|MYC|FOS|JUN|SRC|ABL[12]?|BCR)\b",
 ]
 
+_NER_SINGLETON: "BiomedicalNER | None" = None
+
+
+def get_biomedical_ner(lazy: bool = False) -> "BiomedicalNER":
+    """Process-wide cached BiomedicalNER.
+
+    The SciSpacy models take ~10-15 s to load. Pipeline components
+    (HCADRetriever, SemanticDecoupler, pre-warm helpers) each used to
+    construct their own instance, so model loading repeated mid-benchmark
+    (observed as 40-54 s retrieval spikes on the first evaluated
+    questions). All components now share one instance.
+    """
+    global _NER_SINGLETON
+    if _NER_SINGLETON is None:
+        _NER_SINGLETON = BiomedicalNER(lazy=lazy)
+    elif not lazy and not _NER_SINGLETON._models_loaded:
+        _NER_SINGLETON._load_models()
+    return _NER_SINGLETON
+
+
 class SimpleNER:
     """Lightweight regex-based NER fallback.
 

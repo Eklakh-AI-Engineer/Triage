@@ -163,8 +163,13 @@ class TestBasePaperEvaluator(unittest.TestCase):
             )
         )
         import src.config as _cfg
+        saved = _cfg.JUDGE_OLLAMA_MODEL
         _cfg.JUDGE_OLLAMA_MODEL = JUDGE_OLLAMA_MODEL = "qwen3:14b"  # qwen3 think-path test
-        client = UnifiedLLMClient(model=JUDGE_HF_MODEL, provider="ollama")
+        try:
+            client = UnifiedLLMClient(model=JUDGE_HF_MODEL, provider="ollama")
+        except Exception:
+            _cfg.JUDGE_OLLAMA_MODEL = saved
+            raise
 
         with patch.dict(sys.modules, {"ollama": ollama_module}):
             response = client.chat(
@@ -174,6 +179,7 @@ class TestBasePaperEvaluator(unittest.TestCase):
         self.assertEqual(response, response_content)
         self.assertEqual(client.model, JUDGE_OLLAMA_MODEL)
         self.assertIs(ollama_module.chat.call_args.kwargs["think"], False)
+        _cfg.JUDGE_OLLAMA_MODEL = saved  # do not pollute later tests
 
     def test_huggingface_failure_falls_back_to_distinct_judge(self):
         from src.config import JUDGE_HF_MODEL, JUDGE_OLLAMA_MODEL

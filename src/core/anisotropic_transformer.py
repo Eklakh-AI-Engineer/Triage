@@ -53,6 +53,19 @@ class AnisotropicTransformer:
         self._max_degree_cache: dict[int, int] = {}  # graph id → max degree
 
     # Weight computation from graph topology
+    def graph_block_stats(self, graph: Any, node_name: str) -> tuple[float, float, float]:
+        """Raw (degree, confidence, idf) block stats for a node.
+
+        Public accessor so the learned dynamic tensor can assemble its
+        feature vector from exactly the statistics the static heuristic
+        consumes - no privileged information.
+        """
+        return (
+            self._compute_degree(graph, node_name),
+            self._compute_confidence(graph, node_name),
+            self._compute_idf(node_name, None, graph),
+        )
+
     def compute_weights(
         self,
         graph: Any,

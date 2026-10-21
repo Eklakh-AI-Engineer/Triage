@@ -16,6 +16,47 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
+_ENTITY_TYPE_VOCAB = ["drug", "disease", "gene", "protein", "chemical",
+                       "phenotype", "pathway", "anatomy", "exposure", "other"]
+_RELATION_VOCAB = ["treats", "contraindicated", "causes", "interacts",
+                   "associated", "biomarker", "carries", "indication",
+                   "off-label", "other"]
+
+
+def _entity_type_histogram(entities: dict) -> list[float]:
+    """10-dim presence histogram over NER entity categories (values in [0,1])."""
+    hist = [0.0] * len(_ENTITY_TYPE_VOCAB)
+    counts = []
+    for key, items in (entities or {}).items():
+        n = len(items) if isinstance(items, list) else 0
+        if not n:
+            continue
+        k = str(key).lower()
+        idx = next((i for i, v in enumerate(_ENTITY_TYPE_VOCAB) if v in k),
+                   len(_ENTITY_TYPE_VOCAB) - 1)
+        hist[idx] = max(hist[idx], 1.0)
+        counts.append((idx, n))
+    if counts and counts[0][1]:
+        # scale by the largest per-category count, capped at 1
+        top = max(n for _, n in counts)
+        for idx, n in counts:
+            hist[idx] = min(1.0, n / top)
+    return hist
+
+
+def _relation_onehot(rel_names: list[str]) -> list[float]:
+    """10-dim one-hot of the query's extracted relation type."""
+    vec = [0.0] * len(_RELATION_VOCAB)
+    for name in rel_names:
+        idx = next((i for i, v in enumerate(_RELATION_VOCAB) if v in name),
+                   len(_RELATION_VOCAB) - 1)
+        if any(v in name for v in _RELATION_VOCAB[:-1]):
+            vec[idx] = 1.0
+            return vec
+    vec[-1] = 1.0
+    return vec
+
+
 class HCADRetriever:
     """End-to-end HCAD-RAG retrieval and generation pipeline."""
 
@@ -43,6 +84,32 @@ class HCADRetriever:
         self._node_lookup: Optional[dict] = None
         self._decision_gate: Optional[object] = None
         self._entity_res_cache: dict[str, Optional[str]] = {}
+        # Learned query-adaptive tensor (HCAD_TENSOR_MODE=learned). The
+        # override hook is used ONLY by the tensor trainer to evaluate
+        # sampled weight vectors; production retrieval always predicts
+        # from the tensor itself.
+        self._tensor: Optional[object] = None
+        self._tensor_override: Optional[tuple] = None
+        self._last_tensor_inputs: Optional[tuple] = None
+
+    def _get_tensor(self):
+        """Load the learned dynamic tensor when HCAD_TENSOR_MODE=learned.
+
+        Static heuristic remains the default; a missing or unreadable
+        checkpoint falls back to static with a warning (never breaks
+        retrieval).
+        """
+        import os
+        if (self._tensor is None
+                and os.getenv("HCAD_TENSOR_MODE", "static") == "learned"):
+            try:
+                from src.core.dynamic_tensor import load_tensor
+                self._tensor = load_tensor()
+                logger.info("Learned dynamic tensor active (models/dynamic_tensor.pt).")
+            except Exception as exc:
+                logger.warning("HCAD_TENSOR_MODE=learned but no usable tensor (%s); "
+                               "falling back to static weights.", exc)
+        return self._tensor
 
     def _load_components(self):
         """Initialize components on first access."""
@@ -58,7 +125,8 @@ class HCADRetriever:
         logger.info("Initializing HCAD-RAG components...")
 
         try:
-            self._ner = BiomedicalNER()
+            from src.core.ner_extractor import get_biomedical_ner
+            self._ner = get_biomedical_ner()
         except Exception as e:
             logger.warning(f"BiomedicalNER unavailable ({e}), using SimpleNER fallback.")
             self._ner = SimpleNER()
@@ -400,7 +468,42 @@ class HCADRetriever:
         # Filter out empty strings and ensure we have valid entity names
         all_entity_names = [name for name in all_entity_names if name and isinstance(name, str)]
         primary_entity = all_entity_names[0] if all_entity_names else ""
-        weights = self._transformer.compute_weights(self.graph, primary_entity)
+
+        tensor = self._get_tensor()
+        lam_override = a_override = None
+        if self._tensor_override is not None:
+            lam_override, a_override = self._tensor_override
+        if tensor is not None or lam_override is not None:
+            import torch
+            from src.core.dynamic_tensor import make_query_features
+            deg, conf, idf = self._transformer.graph_block_stats(
+                self.graph, primary_entity)
+            rel_names = [str(r.get("relation", "")).lower() for r in (relations or [])
+                         if isinstance(r, dict)]
+            neg_flag = 1.0 if any("contra" in r or "not_" in r for r in rel_names) else 0.0
+            type_hist = _entity_type_histogram(entities)
+            rel_onehot = _relation_onehot(rel_names)
+            feats = make_query_features(
+                None,
+                max(0.0, min(1.0, deg)),
+                max(0.0, min(1.0, conf)),
+                max(0.0, min(1.0, idf)),
+                neg_flag,
+                0.0,
+                type_hist,
+                rel_onehot,
+            )
+            Q_t = torch.tensor(np.asarray(Q, dtype=np.float32))
+            if lam_override is not None:
+                lam_t, a_t = lam_override, a_override
+            else:
+                lam_t, a_t = tensor(Q_t, feats)
+                self._last_tensor_inputs = (Q_t.detach(), feats.detach())
+            weights = lam_t.detach().cpu().numpy().astype(np.float64)
+            component_a = a_t.detach().cpu().numpy()
+        else:
+            weights = self._transformer.compute_weights(self.graph, primary_entity)
+            component_a = None
 
         candidates = self._get_candidate_contexts(
             query, entities, n_vector=n_candidates
@@ -443,9 +546,16 @@ class HCADRetriever:
             relations_list=relations_list,
             as_numpy=True,
         )
-        phi_scores = self._transformer.compute_batch_component_similarities(
-            Q, C_batch, weights
-        )
+        if component_a is not None:
+            phi_scores = self._transformer.compute_batch_component_similarities(
+                Q, C_batch, weights,
+                alpha=float(component_a[0]), beta=float(component_a[1]),
+                gamma=float(component_a[2]),
+            )
+        else:
+            phi_scores = self._transformer.compute_batch_component_similarities(
+                Q, C_batch, weights
+            )
 
         filtered = self._filter.filter_contexts(
             candidates,
