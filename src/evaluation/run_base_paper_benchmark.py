@@ -537,15 +537,12 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     _ = hcad_rag.hypergraph
 
     # Paper protocol first (Sec. 3.5): LLM-generated questions with source
-    # chunks as references; fall back to the legacy curated loader only if
-    # generation is unavailable (no LLM reachable).
-    try:
-        samples = generate_paper_protocol_questions(num_samples, pool=question_pool)
-        logger.info("Using paper-protocol questions (%d).", len(samples))
-    except Exception as exc:
-        logger.warning("Paper-protocol question generation failed (%s); "
-                       "falling back to curated loader.", exc)
-        samples = load_clinical_benchmark_samples(num_samples)
+    # chunks as references. Generation failure is FATAL: falling back to the
+    # handful of curated questions silently produces a non-protocol
+    # benchmark that cannot go in the report, while the notebook cell
+    # itself (! shell call) keeps running as if nothing happened.
+    samples = generate_paper_protocol_questions(num_samples, pool=question_pool)
+    logger.info("Using paper-protocol questions (%d).", len(samples))
     if not samples:
         # An empty sample set (e.g., the LLM server died before generation)
         # must NOT silently produce an empty results file - refuse loudly.
