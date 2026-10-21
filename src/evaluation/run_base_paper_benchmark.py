@@ -328,12 +328,16 @@ TIERS = {
 # types plus the PMC clinical-text corpus, instead of the first N documents of
 # the vector store (which are all contiguous PrimeKG drug_protein triples -
 # the root cause of the degenerate 8-fact pilot question set).
+# Relation vocabulary verified against the built store's sqlite
+# (data/vectordb/chroma.sqlite3): contraindication, disease_disease,
+# disease_phenotype_negative, disease_phenotype_positive, disease_protein,
+# drug_effect, drug_protein, indication, off-label use. Strata absent from
+# the store would simply be skipped, but keeping the list exact avoids
+# wasted fetch attempts and guarantees every stratum contributes.
 TRIPLE_RELATION_STRATA = [
-    "drug_protein", "contraindication", "indication", "drug_drug",
-    "disease_protein", "biomarker", "phenotype_protein",
-    "disease_phenotype_positive", "protein_protein", "cause",
-    "disease_disease", "carries", "off-label use", "pathway_protein",
-    "disease_phenotype_negative",
+    "drug_protein", "contraindication", "indication", "drug_effect",
+    "disease_protein", "disease_phenotype_positive",
+    "disease_phenotype_negative", "disease_disease", "off-label use",
 ]
 
 def _question_pool_of(doc_id: str, pool: str) -> bool:
