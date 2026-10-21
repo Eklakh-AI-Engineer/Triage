@@ -100,6 +100,12 @@ class FakeStratifiedStore:
         return len(self.docs)
 
     def get(self, where=None, limit=None, offset=None, include=None):
+        # Mirror chromadb >= 1.x include validation: "ids" is not a valid
+        # include item for get() (ids are always returned).
+        if include and "ids" in include:
+            raise ValueError(
+                "Expected include item to be one of documents, embeddings, "
+                "metadatas, distances, uris, data, got ids in get.")
         pool_pred = None
         if where:
             if "source" in where:

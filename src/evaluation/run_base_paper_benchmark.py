@@ -374,11 +374,11 @@ def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[
             offset = rng.randrange(0, span)
             try:
                 got = collection.get(where=s["where"], limit=per, offset=offset,
-                                     include=["documents", "metadatas", "ids"])
+                                     include=["documents", "metadatas"])
             except TypeError:
                 # chroma build without offset kwarg: fall back to head window
                 got = collection.get(where=s["where"], limit=per,
-                                     include=["documents", "metadatas", "ids"])
+                                     include=["documents", "metadatas"])
                 break
             if got.get("documents"):
                 break
