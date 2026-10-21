@@ -558,7 +558,8 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     # therefore aggregate over the complete sample set, not just the
     # questions evaluated in the current session.
 
-    checkpoint_path = RESULTS_DIR / "base_paper_checkpoint.jsonl"
+    checkpoint_path = RESULTS_DIR / os.getenv(
+        "BENCHMARK_CHECKPOINT", "base_paper_checkpoint.jsonl")
     question_cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
     # Off-box checkpoint upload cadence (sessions can die mid-run; the artifact
     # in W&B is the only copy that survives a killed Kaggle session).
@@ -855,7 +856,8 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         },
     }
 
-    out_file = output_path or (RESULTS_DIR / "base_paper_benchmark_results.json")
+    out_file = output_path or (RESULTS_DIR / os.getenv(
+        "BENCHMARK_RESULTS_FILE", "base_paper_benchmark_results.json"))
     out_file.parent.mkdir(parents=True, exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(summary_results, f, indent=2)
