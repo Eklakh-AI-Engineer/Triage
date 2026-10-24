@@ -346,10 +346,14 @@ TRIPLE_RELATION_STRATA = [
 ]
 
 def _question_pool_of(doc_id: str, pool: str) -> bool:
-    """Deterministic dev/test pool assignment by document id hash.
+    """Deterministic dev/test pool assignment by article/entity key hash.
 
-    Keeps the question pool used to train/tune HCAD components strictly
-    disjoint from the held-out evaluation pool (no data leakage).
+    The key is the SAME one used for per-chunk dedup: the parent article
+    (doc_id) for PMC prose and the head entity (head_name) for PrimeKG
+    triples. This keeps the pools disjoint at the article/entity level, so
+    no single clinical study or drug contributes questions to both the
+    pool used to train/tune HCAD components and the held-out evaluation
+    pool (no data leakage, Critical Review V3).
     """
     import hashlib
     h = int(hashlib.sha1(str(doc_id).encode("utf-8")).hexdigest()[:8], 16)
@@ -481,7 +485,11 @@ def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[
                 key = str(m.get("doc_id") or m.get("head_name") or i)
                 if key in seen:
                     continue
-                if not _question_pool_of(i, pool):
+                # Pool assignment must run on the SAME key as dedup (article
+                # doc_id for PMC, head entity for PrimeKG): hashing raw chunk
+                # ids let chunks of one article / one drug straddle the dev
+                # and test pools (Critical Review V3 leakage vector).
+                if not _question_pool_of(key, pool):
                     continue
                 seen.add(key)
                 out.append({"doc": d, "id": str(i), "kind": s["kind"],

@@ -280,3 +280,80 @@ def test_question_set_id_is_stable_and_changes_with_the_set():
     other_set = [{"question": "q1", "source_chunk_id": "chunk2", "pool": "test"}]
     assert runner._question_set_id(samples) == runner._question_set_id(same_set)
     assert runner._question_set_id(samples) != runner._question_set_id(other_set)
+
+
+def test_pool_split_is_article_level_not_chunk_level():
+    """Chunks of the same PMC article (and triples of the same head drug)
+    must land in the SAME dev/test pool.
+
+    Chunk-id hashing let one article's paragraphs straddle both pools
+    (Critical Review V3 leakage vector); the pool key must be the same
+    article/entity key used for dedup.
+    """
+    import random
+
+    docs, ids, metas = [], [], []
+    for art in range(3):
+        for chunk in range(6):
+            docs.append(f"Article {art} chunk {chunk} presents with condition "
+                        "and was managed per guideline with monitoring and "
+                        "follow-up care assessment. " * 4)
+            ids.append(f"pmc_ART{art}_{chunk}")
+            metas.append({"source": "pmc", "doc_id": f"ART{art}", "relation": "",
+                          "head_name": "", "doc_type": "clinical_text"})
+    for drug in range(3):
+        for tgt in range(4):
+            docs.append(f"Drug{drug} drug protein Target{drug}_{tgt} in the "
+                        "context of clinical evidence and therapeutic use.")
+            ids.append(f"edge_{drug}_{tgt}")
+            metas.append({"relation": "drug_protein", "head_name": f"Drug{drug}",
+                          "source": "", "doc_type": ""})
+
+    class SharedArticleStore:
+        def __init__(self):
+            self._docs = list(zip(docs, ids, metas))
+
+        def count(self):
+            return len(docs)
+
+        def get(self, where=None, limit=None, offset=None, include=None):
+            if include and "ids" in include:
+                raise ValueError("ids is not a valid include item")
+            if where:
+                if "source" in where:
+                    items = [t for t in self._docs
+                             if t[2].get("source") == where["source"]]
+                else:
+                    items = [t for t in self._docs
+                             if t[2].get("relation") == where["relation"]]
+            else:
+                items = self._docs
+            off = offset or 0
+            return {
+                "documents": [t[0] for t in items[off:off + limit]],
+                "ids": [t[1] for t in items[off:off + limit]],
+                "metadatas": [t[2] for t in items[off:off + limit]],
+            }
+
+    store = SharedArticleStore()
+    dev = runner._fetch_stratified_chunks(store, 12, "dev", random.Random(42))
+    test = runner._fetch_stratified_chunks(store, 12, "test", random.Random(42))
+    dev_ids = {c["id"] for c in dev}
+    test_ids = {c["id"] for c in test}
+    assert not (dev_ids & test_ids), "no chunk may appear in both pools"
+
+    for art in ("ART0", "ART1", "ART2"):
+        art_chunks = {cid for cid in dev_ids | test_ids
+                      if cid.startswith(f"pmc_{art}_")}
+        in_dev = any(cid in dev_ids for cid in art_chunks)
+        in_test = any(cid in test_ids for cid in art_chunks)
+        assert not (in_dev and in_test), \
+            f"article {art} straddles dev/test pools (chunk-level hashing)"
+
+    for drug in ("0", "1", "2"):
+        drug_edges = {cid for cid in dev_ids | test_ids
+                      if cid.startswith(f"edge_{drug}_")}
+        in_dev = any(cid in dev_ids for cid in drug_edges)
+        in_test = any(cid in test_ids for cid in drug_edges)
+        assert not (in_dev and in_test), \
+            f"Drug{drug} triples straddle dev/test pools (chunk-level hashing)"
