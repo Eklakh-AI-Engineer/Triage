@@ -355,55 +355,76 @@ def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[
     """Fetch candidate source chunks stratified by corpus segment.
 
     PMC clinical-text chunks and each PrimeKG relation type form separate
-    strata; within a stratum a seeded random window is drawn so questions do
-    not all come from the head of the store. Chunks are deduplicated per
-    entity (head_name) / article (doc_id) so a single drug cannot dominate,
-    and filtered to the requested dev/test pool.
+    strata. Within each stratum MULTIPLE random windows are drawn,
+    round-robin across strata, until enough distinct pool-qualified chunks
+    are collected: PrimeKG's kg.csv is ordered by head drug, so a single
+    contiguous window is almost one entity and the old one-window-per-
+    stratum draw produced only ~50 usable chunks from the 817k store.
+    Each stratum's offset span shrinks adaptively when a window lands
+    past the end of that stratum. Chunks are deduplicated per entity
+    (head_name) / article (doc_id) so a single drug cannot dominate, and
+    filtered to the requested dev/test pool.
     """
-    strata = [{"where": {"source": "pmc"}, "kind": "pmc"}]
-    strata += [{"where": {"relation": rel}, "kind": "primekg"} for rel in TRIPLE_RELATION_STRATA]
-    per = max(6, (num_docs * 3) // len(strata) + 4)
+    strata = [{"where": {"source": "pmc"}, "kind": "pmc",
+               "span": None, "no_offset": False}]
+    strata += [{"where": {"relation": rel}, "kind": "primekg",
+                "span": None, "no_offset": False}
+               for rel in TRIPLE_RELATION_STRATA]
     total = collection.count()
+    target = num_docs * 2
+    per = 64
     out: list[dict] = []
-    for s in strata:
-        got = None
-        # Geometrically shrinking random offsets: guarantees a window inside
-        # even small strata by the last attempt (offset 0).
-        span = max(1, total - per)
-        for _ in range(4):
-            offset = rng.randrange(0, span)
-            try:
-                got = collection.get(where=s["where"], limit=per, offset=offset,
-                                     include=["documents", "metadatas"])
-            except TypeError:
-                # chroma build without offset kwarg: fall back to head window
-                got = collection.get(where=s["where"], limit=per,
-                                     include=["documents", "metadatas"])
+    seen: set[str] = set()
+    for _round in range(24):
+        if len(out) >= target:
+            break
+        for s in strata:
+            if len(out) >= target:
                 break
-            if got.get("documents"):
-                break
-            span = max(1, span // 4)
-        if not got or not got.get("documents"):
-            continue
-        docs = got["documents"]
-        metas = got.get("metadatas") or [{}] * len(docs)
-        ids = got.get("ids") or [str(i) for i in range(len(docs))]
-        seen: set[str] = set()
-        for d, m, i in zip(docs, metas, ids):
-            if not d or len(d) < 30:
-                continue
-            if s["kind"] == "pmc" and len(d) < 200:
-                continue
-            if s["kind"] == "primekg" and len(d) > 300:
-                continue
-            key = str(m.get("doc_id") or m.get("head_name") or i)
-            if key in seen:
-                continue
-            if not _question_pool_of(i, pool):
-                continue
-            seen.add(key)
-            out.append({"doc": d, "id": str(i), "kind": s["kind"],
-                        "relation": str(m.get("relation") or "")})
+            if s["no_offset"]:
+                try:
+                    got = collection.get(where=s["where"], limit=per,
+                                         include=["documents", "metadatas"])
+                except TypeError:
+                    got = None
+            else:
+                span = s["span"] or total
+                offset = rng.randrange(0, max(1, span - per))
+                try:
+                    got = collection.get(where=s["where"], limit=per,
+                                         offset=offset,
+                                         include=["documents", "metadatas"])
+                except TypeError:
+                    # chroma build without offset support: head window only
+                    s["no_offset"] = True
+                    try:
+                        got = collection.get(where=s["where"], limit=per,
+                                             include=["documents", "metadatas"])
+                    except TypeError:
+                        got = None
+                else:
+                    if not (got or {}).get("documents") and offset > 0:
+                        # window landed past this stratum's end - shrink span
+                        s["span"] = max(per, offset)
+                        continue
+            docs = (got or {}).get("documents") or []
+            metas = (got or {}).get("metadatas") or [{}] * len(docs)
+            ids = (got or {}).get("ids") or [str(i) for i in range(len(docs))]
+            for d, m, i in zip(docs, metas, ids):
+                if not d or len(d) < 30:
+                    continue
+                if s["kind"] == "pmc" and len(d) < 200:
+                    continue
+                if s["kind"] == "primekg" and len(d) > 300:
+                    continue
+                key = str(m.get("doc_id") or m.get("head_name") or i)
+                if key in seen:
+                    continue
+                if not _question_pool_of(i, pool):
+                    continue
+                seen.add(key)
+                out.append({"doc": d, "id": str(i), "kind": s["kind"],
+                            "relation": str(m.get("relation") or "")})
     rng.shuffle(out)
     return out
 
