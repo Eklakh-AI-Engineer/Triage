@@ -26,5 +26,10 @@ class TestHCADRetrieverEntityResolution(unittest.TestCase):
     def test_unmatched_name_does_not_resolve_by_arbitrary_prefix(self):
         self.assertIsNone(self.retriever._find_entity_in_graph("metformx"))
 
+    def test_benchmark_mode_raises_on_vector_failure(self):
+        benchmark_retriever = HCADRetriever(fail_on_vector_error=True)
+        with self.assertRaisesRegex(RuntimeError, "Vector store retrieval failed"):
+            benchmark_retriever._handle_vector_error(ValueError("bad query kwargs"))
+
 if __name__ == "__main__":
     unittest.main()

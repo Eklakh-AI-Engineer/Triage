@@ -28,6 +28,15 @@ from src.config import TENSOR_MODEL_PATH
 logger = logging.getLogger(__name__)
 
 
+def _mean_reward(rewards: list[float], epoch: int) -> float:
+    if not rewards:
+        raise RuntimeError(
+            f"Tensor training epoch {epoch} produced no rewards; "
+            "all dev questions were skipped during retrieval."
+        )
+    return sum(rewards) / len(rewards)
+
+
 def train_tensor(
     retriever,
     dev_questions: list[dict],
@@ -131,7 +140,7 @@ def train_tensor(
             optimizer.step()
             baseline = 0.9 * baseline + 0.1 * reward
 
-        mean_reward = sum(rewards) / max(len(rewards), 1)
+        mean_reward = _mean_reward(rewards, epoch + 1)
         history.append({"epoch": epoch + 1, "mean_ndcg_reward": mean_reward,
                         "n": len(rewards)})
         logger.info("Tensor training epoch %d/%d: mean NDCG@%d reward %.4f "

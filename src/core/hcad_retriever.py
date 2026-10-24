@@ -66,11 +66,13 @@ class HCADRetriever:
         collection=None,
         model_name: Optional[str] = None,
         k: float = FILTERING_K,
+        fail_on_vector_error: bool = False,
     ):
         self._graph = graph
         self._collection = collection
         self.model_name = model_name
         self.k = k
+        self.fail_on_vector_error = fail_on_vector_error
 
         self._ner: Optional[object] = None
         self._relation_extractor: Optional[object] = None
@@ -91,6 +93,11 @@ class HCADRetriever:
         self._tensor: Optional[object] = None
         self._tensor_override: Optional[tuple] = None
         self._last_tensor_inputs: Optional[tuple] = None
+
+    def _handle_vector_error(self, exc: Exception) -> None:
+        logger.warning("Vector store retrieval failed: %s", exc)
+        if self.fail_on_vector_error:
+            raise RuntimeError("Vector store retrieval failed during benchmark retrieval.") from exc
 
     def _get_tensor(self):
         """Load the learned dynamic tensor when HCAD_TENSOR_MODE=learned.
@@ -321,7 +328,7 @@ class HCADRetriever:
                     )
                     seen_docs.add(doc)
         except Exception as e:
-            logger.warning(f"Vector store retrieval failed: {e}")
+            self._handle_vector_error(e)
 
         if self.hypergraph is not None:
             all_entity_names = []
