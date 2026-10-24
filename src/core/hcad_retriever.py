@@ -93,6 +93,7 @@ class HCADRetriever:
         self._tensor: Optional[object] = None
         self._tensor_override: Optional[tuple] = None
         self._last_tensor_inputs: Optional[tuple] = None
+        self._last_channel_sims: Optional["np.ndarray"] = None
 
     def _handle_vector_error(self, exc: Exception) -> None:
         logger.warning("Vector store retrieval failed: %s", exc)
@@ -505,7 +506,10 @@ class HCADRetriever:
                 lam_t, a_t = lam_override, a_override
             else:
                 lam_t, a_t = tensor(Q_t, feats)
-                self._last_tensor_inputs = (Q_t.detach(), feats.detach())
+            # Always record (Q, feats) for this query - the listwise trainer
+            # keys its channel-weight adapter to these inputs even when the
+            # warm-up pass ran under an explicit override.
+            self._last_tensor_inputs = (Q_t.detach(), feats.detach())
             weights = lam_t.detach().cpu().numpy().astype(np.float64)
             component_a = a_t.detach().cpu().numpy()
         else:
@@ -559,6 +563,11 @@ class HCADRetriever:
                 alpha=float(component_a[0]), beta=float(component_a[1]),
                 gamma=float(component_a[2]),
             )
+            # Per-channel similarities for this (query, candidate pool)
+            # pair: the listwise trainer learns the query-adaptive channel
+            # weights over exactly these columns.
+            self._last_channel_sims = self._transformer.compute_channel_similarities(
+                Q, C_batch, weights)
         else:
             phi_scores = self._transformer.compute_batch_component_similarities(
                 Q, C_batch, weights

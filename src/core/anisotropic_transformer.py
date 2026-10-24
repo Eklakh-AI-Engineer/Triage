@@ -371,6 +371,38 @@ class AnisotropicTransformer:
         }
 
     @staticmethod
+    def compute_channel_similarities(
+        Q: np.ndarray,
+        C_batch: np.ndarray,
+        weights: np.ndarray,
+    ) -> np.ndarray:
+        """Per-channel weighted cosine similarities S_k(Q, C_i).
+
+        Returns
+        -------
+        np.ndarray - shape (N, 3): S[:, k] is the weighted cosine between the
+        query's channel k and every candidate's channel k. Phi_Final is a
+        channel-weighted combination of these columns, which makes listwise
+        training of the channel weights (alpha, beta, gamma) differentiable:
+        the columns do not depend on the channel weights being learned.
+        """
+        if len(C_batch) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+
+        Q = np.asarray(Q)
+        C_batch = np.asarray(C_batch)
+        out = np.zeros((len(C_batch), 3), dtype=np.float32)
+        for c_idx in range(3):
+            q = Q[c_idx]
+            c_cand = C_batch[:, c_idx, :]
+            q_w = q * weights
+            num = np.dot(c_cand, q_w)
+            denom_q = np.sqrt(np.sum(weights * q**2))
+            denom_c = np.sqrt(np.sum(weights * (c_cand**2), axis=1))
+            out[:, c_idx] = num / (denom_q * denom_c + 1e-8)
+        return out
+
+    @staticmethod
     def compute_batch_component_similarities(
         Q: np.ndarray,
         C_batch: np.ndarray,
@@ -395,15 +427,6 @@ class AnisotropicTransformer:
         if len(C_batch) == 0:
             return np.empty((0,), dtype=np.float32)
 
-        scores = np.zeros(len(C_batch), dtype=np.float32)
-        for c_idx, coeff in enumerate([alpha, beta, gamma]):
-            q = Q[c_idx]
-            c_cand = C_batch[:, c_idx, :]
-            q_w = q * weights
-            num = np.dot(c_cand, q_w)
-            denom_q = np.sqrt(np.sum(weights * q**2))
-            denom_c = np.sqrt(np.sum(weights * (c_cand**2), axis=1))
-            S = num / (denom_q * denom_c + 1e-8)
-            scores += coeff * S
-
-        return scores
+        S = AnisotropicTransformer.compute_channel_similarities(Q, C_batch, weights)
+        coeffs = np.array([alpha, beta, gamma], dtype=np.float32)
+        return S @ coeffs
