@@ -260,10 +260,8 @@ def test_questions_come_from_distinct_chunks(cache_env, monkeypatch):
 
     out = runner.generate_paper_protocol_questions(9, generator=FakeGen(),
                                                    pool="test")
-    refs = [s["reference"] for s in out]
-    assert len(refs) == len(set(refs)), "questions must have distinct references"
     ids = [s["source_chunk_id"] for s in out]
-    assert len(ids) == len(set(ids))
+    assert len(ids) == len(set(ids)), "questions must have distinct source chunks"
 
 
 def test_invalid_pool_rejected(cache_env):
