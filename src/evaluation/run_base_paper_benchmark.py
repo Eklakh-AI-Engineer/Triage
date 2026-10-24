@@ -394,7 +394,13 @@ def _completed_questions_from_checkpoint(
             for line in f:
                 if not line.strip():
                     continue
-                record = json.loads(line)
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    # A killed session can leave a truncated final line; the
+                    # aggregation path already skips those - resume must not
+                    # crash on the exact failures it exists to recover from.
+                    continue
                 if (record.get("question_pool") == pool
                         and record.get("question_set_id") == question_set_id):
                     completed.add(record["question"])
