@@ -189,7 +189,12 @@ def test_sorted_by_head_store_yields_diverse_pool_chunks():
     assert len({chunk["id"] for chunk in chunks}) == len(chunks)
     assert len({chunk["doc"].split()[0] for chunk in chunks
                 if chunk["kind"] == "primekg"}) >= 10
-    assert all(runner._question_pool_of(chunk["id"], "test") for chunk in chunks)
+    # Pool membership is assigned on the article/entity key (V3), not the
+    # raw chunk id - a chunk id may hash to either pool; its pool_key may not.
+    assert all(runner._question_pool_of(chunk["pool_key"], "test")
+               for chunk in chunks)
+    assert all(runner._question_pool_of(chunk["pool_key"], "dev")
+               for chunk in dev_chunks)
     assert {chunk["id"] for chunk in chunks}.isdisjoint(
         {chunk["id"] for chunk in dev_chunks})
 

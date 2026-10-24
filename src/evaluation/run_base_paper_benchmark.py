@@ -493,7 +493,10 @@ def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[
                     continue
                 seen.add(key)
                 out.append({"doc": d, "id": str(i), "kind": s["kind"],
-                            "relation": str(m.get("relation") or "")})
+                            "relation": str(m.get("relation") or ""),
+                            # the article/entity key the pool was assigned by
+                            # (provenance for leakage audits and for tests)
+                            "pool_key": key})
     rng.shuffle(out)
     return out
 
