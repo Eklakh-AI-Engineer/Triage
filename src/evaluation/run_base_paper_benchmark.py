@@ -225,7 +225,8 @@ def _ranked_relevance(
     return relevance
 
 def _records_from_checkpoint(
-    checkpoint_path: Path, sample_questions: set
+    checkpoint_path: Path, sample_questions: set, question_pool: Optional[str] = None,
+    question_set_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Load the newest per-question record for every question in this run.
 
@@ -244,8 +245,12 @@ def _records_from_checkpoint(
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if record.get("question") in sample_questions:
-                    by_question[record["question"]] = record  # later lines win
+                if (record.get("question") in sample_questions
+                        and (question_pool is None
+                             or record.get("question_pool") == question_pool)):
+                    if (question_set_id is None
+                            or record.get("question_set_id") == question_set_id):
+                        by_question[record["question"]] = record  # later lines win
 
     scoring = {"Baseline LLM": [], "Vanilla RAG": [], "HCAD-RAG": []}
     selection = {"HCAD_vs_Vanilla": [], "HCAD_vs_Baseline": []}
@@ -351,6 +356,50 @@ def _question_pool_of(doc_id: str, pool: str) -> bool:
     want = 0 if pool == "test" else 1
     return h % 2 == want
 
+def _stratum_size(collection, where: dict, upper_bound: int) -> Optional[int]:
+    """Find the filtered row count using offset probes, or None if unsupported."""
+    low, high = 0, upper_bound
+    while low < high:
+        mid = (low + high) // 2
+        try:
+            got = collection.get(where=where, limit=1, offset=mid,
+                                 include=["documents", "metadatas"])
+        except TypeError:
+            return None
+        if (got or {}).get("documents"):
+            low = mid + 1
+        else:
+            high = mid
+    return low
+
+def _paper_question_cache_path(num_samples: int, pool: str) -> Path:
+    if pool not in ("test", "dev"):
+        raise ValueError(f"pool must be 'test' or 'dev', got {pool!r}")
+    return RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}_{pool}.json"
+
+def _question_set_id(samples: list[dict]) -> str:
+    import hashlib
+
+    contract = [(sample["question"], sample.get("source_chunk_id"), sample.get("pool"))
+                for sample in samples]
+    payload = json.dumps(contract, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+def _completed_questions_from_checkpoint(
+    checkpoint_path: Path, pool: str, question_set_id: str
+) -> set[str]:
+    completed: set[str] = set()
+    if checkpoint_path.exists():
+        with open(checkpoint_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if (record.get("question_pool") == pool
+                        and record.get("question_set_id") == question_set_id):
+                    completed.add(record["question"])
+    return completed
+
 def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[dict]:
     """Fetch candidate source chunks stratified by corpus segment.
 
@@ -371,6 +420,10 @@ def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[
                 "span": None, "no_offset": False}
                for rel in TRIPLE_RELATION_STRATA]
     total = collection.count()
+    for s in strata:
+        s["span"] = _stratum_size(collection, s["where"], total)
+        if s["span"] is None:
+            s["no_offset"] = True
     target = num_docs * 2
     per = 64
     out: list[dict] = []
@@ -388,8 +441,10 @@ def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[
                 except TypeError:
                     got = None
             else:
-                span = s["span"] or total
-                offset = rng.randrange(0, max(1, span - per))
+                span = s["span"]
+                if not span:
+                    continue
+                offset = rng.randrange(0, max(1, span - per + 1))
                 try:
                     got = collection.get(where=s["where"], limit=per,
                                          offset=offset,
@@ -454,30 +509,26 @@ def generate_paper_protocol_questions(num_samples: int, generator=None,
 
     if pool not in ("test", "dev"):
         raise ValueError(f"pool must be 'test' or 'dev', got {pool!r}")
-    cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}_{pool}.json"
+    cache_path = _paper_question_cache_path(num_samples, pool)
     legacy_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
     if cache_path.exists():
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 cached = json.load(f)
-            if cached and all("question" in s and "reference" in s for s in cached):
+            if (len(cached) == num_samples and all(
+                    "question" in s and "reference" in s
+                    and s.get("pool") == pool
+                    and s.get("source") == "paper_protocol"
+                    and s.get("source_chunk_id")
+                    for s in cached)):
                 logger.info("Paper-protocol questions loaded from cache: %d (pool=%s).",
                             len(cached), pool)
                 return cached
         except Exception as exc:
             logger.warning("Question cache unreadable (%s); regenerating.", exc)
-    elif legacy_path.exists():
-        try:
-            with open(legacy_path, "r", encoding="utf-8") as f:
-                cached = json.load(f)
-            if cached and all("question" in s and "reference" in s for s in cached):
-                logger.warning(
-                    "Legacy (pre-stratification) question cache used: %s. This set was "
-                    "NOT drawn stratified and may be degenerate; delete it to regenerate.",
-                    legacy_path.name)
-                return cached
-        except Exception:
-            pass
+    if legacy_path.exists():
+        logger.warning("Ignoring unscoped legacy question cache %s; regenerating pool=%s.",
+                       legacy_path.name, pool)
 
     if generator is None:
         generator = UnifiedLLMClient(temperature=0.3)
@@ -521,13 +572,10 @@ def generate_paper_protocol_questions(num_samples: int, generator=None,
     logger.info("Paper-protocol questions: %s (pool=%s, kinds=%s)", tier_sizes, pool,
                 {k: sum(1 for s in samples if s["source_kind"] == k)
                  for k in ("pmc", "primekg")})
-    try:
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(samples, f, ensure_ascii=False, indent=2)
-        logger.info("Paper-protocol questions cached to %s (resume-safe).", cache_path)
-    except Exception as exc:
-        logger.warning("Could not cache questions (%s); resume will regenerate.", exc)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(samples, f, ensure_ascii=False, indent=2)
+    logger.info("Paper-protocol questions cached to %s (resume-safe).", cache_path)
     return samples
 
 @tracked_run(
@@ -551,7 +599,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     logger.info("Loading baseline and HCAD models...")
     baseline_llm = BaselineLLM()
     vanilla_rag = VanillaVectorRAG()
-    hcad_rag = HCADRetriever()
+    hcad_rag = HCADRetriever(fail_on_vector_error=True)
     logger.info("Pre-warming retriever components (graph, vector store, NER models)...")
     hcad_rag._ensure_components()
     _ = hcad_rag.graph
@@ -582,18 +630,16 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
 
     checkpoint_path = RESULTS_DIR / os.getenv(
         "BENCHMARK_CHECKPOINT", "base_paper_checkpoint.jsonl")
-    question_cache_path = RESULTS_DIR / f"paper_questions_n{num_samples}_seed{RANDOM_SEED}.json"
+    question_cache_path = _paper_question_cache_path(num_samples, question_pool)
+    question_set_id = _question_set_id(samples)
     # Off-box checkpoint upload cadence (sessions can die mid-run; the artifact
     # in W&B is the only copy that survives a killed Kaggle session).
     checkpoint_upload_every = int(os.getenv("WANDB_CHECKPOINT_EVERY", "5"))
     evaluated_this_session = 0
-    completed_questions = set()
-    if checkpoint_path.exists():
-        with open(checkpoint_path, "r", encoding="utf-8") as f:
-            completed_questions = {
-                json.loads(line)["question"] for line in f if line.strip()
-            }
-        logger.info("Resuming: %d samples already checkpointed.", len(completed_questions))
+    completed_questions = _completed_questions_from_checkpoint(
+        checkpoint_path, question_pool, question_set_id
+    )
+    logger.info("Resuming: %d samples already checkpointed.", len(completed_questions))
 
     for idx, sample in enumerate(samples):
         q = sample["question"]
@@ -705,6 +751,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                 "source_kind": sample.get("source_kind", ""),
                 "source_chunk_id": sample.get("source_chunk_id", ""),
                 "question_pool": sample.get("pool", question_pool),
+                "question_set_id": question_set_id,
                 "scores": {
                     "Baseline LLM": score_base.to_dict(),
                     "Vanilla RAG": score_van.to_dict(),
@@ -731,7 +778,8 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     # Aggregate from the checkpoint so resumed runs include previously
     # evaluated questions of this sample set.
     records = _records_from_checkpoint(
-        checkpoint_path, {s["question"] for s in samples}
+        checkpoint_path, {s["question"] for s in samples}, question_pool=question_pool,
+        question_set_id=question_set_id,
     )
 
     # Compute aggregate statistics
@@ -853,6 +901,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             "prompt_mode": "zero_shot" if not __import__("src.config", fromlist=["ENABLE_FEW_SHOT"]).ENABLE_FEW_SHOT else "few_shot",
             "random_seed": RANDOM_SEED,
             "question_pool": question_pool,
+            "question_set_id": question_set_id,
         },
         "scoring_based_assessment": final_scores,
         "scoring_by_difficulty_tier": {

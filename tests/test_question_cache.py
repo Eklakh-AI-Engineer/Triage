@@ -23,10 +23,10 @@ def _legacy_cache_file(tmp_path, n=5):
 
 
 def test_cached_questions_are_reused_without_regeneration(cache_env, monkeypatch):
-    cached = [
-        {"question": "Cached question?", "reference": "chunk text",
-         "ground_truth": "", "source": "paper_protocol", "difficulty_tier": 1},
-    ]
+    cached = [{"question": f"Cached question {i}?", "reference": "chunk text",
+               "ground_truth": "", "source": "paper_protocol", "difficulty_tier": 1,
+               "pool": "test", "source_chunk_id": f"chunk{i}"}
+              for i in range(5)]
     _cache_file(cache_env).write_text(json.dumps(cached), encoding="utf-8")
 
     # Regeneration must never run: explode if it tries.
@@ -39,20 +39,25 @@ def test_cached_questions_are_reused_without_regeneration(cache_env, monkeypatch
     assert out == cached
 
 
-def test_legacy_cache_is_loaded_with_a_warning(cache_env, monkeypatch):
+def test_unscoped_legacy_cache_is_ignored_for_pool_generation(cache_env, monkeypatch):
     cached = [
         {"question": "Legacy question?", "reference": "chunk text",
          "ground_truth": "", "source": "paper_protocol", "difficulty_tier": 1},
     ]
     _legacy_cache_file(cache_env).write_text(json.dumps(cached), encoding="utf-8")
 
-    def _boom(*a, **k):
-        raise AssertionError("regeneration should not run when cache is valid")
     monkeypatch.setattr(
-        "src.data.build_vector_store.load_vector_store", _boom)
+        "src.data.build_vector_store.load_vector_store",
+        lambda: FakeStratifiedStore(n_docs=2000))
 
-    out = runner.generate_paper_protocol_questions(5)
-    assert out == cached
+    class FakeGen:
+        def chat(self, messages):
+            return "Generated question about this source evidence?"
+
+    out = runner.generate_paper_protocol_questions(5, generator=FakeGen(), pool="dev")
+    assert len(out) == 5
+    assert all(item["pool"] == "dev" for item in out)
+    assert all(item["question"] != "Legacy question?" for item in out)
 
 
 def test_corrupt_cache_falls_back_to_regeneration(cache_env, monkeypatch):
@@ -66,6 +71,30 @@ def test_corrupt_cache_falls_back_to_regeneration(cache_env, monkeypatch):
 
     with pytest.raises(RuntimeError, match="regeneration attempted"):
         runner.generate_paper_protocol_questions(5)
+
+
+def test_question_cache_write_failure_is_fatal(cache_env, monkeypatch):
+    import builtins
+
+    monkeypatch.setattr(
+        "src.data.build_vector_store.load_vector_store",
+        lambda: FakeStratifiedStore(n_docs=2000))
+    real_open = builtins.open
+    cache = _cache_file(cache_env, n=5)
+
+    def fail_cache_write(path, mode="r", *args, **kwargs):
+        if str(path) == str(cache) and mode == "w":
+            raise OSError("simulated full disk")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fail_cache_write)
+
+    class FakeGen:
+        def chat(self, messages):
+            return "Generated question about this source evidence?"
+
+    with pytest.raises(OSError, match="simulated full disk"):
+        runner.generate_paper_protocol_questions(5, generator=FakeGen())
 
 
 class FakeStratifiedStore:
@@ -120,6 +149,49 @@ class FakeStratifiedStore:
             "ids": [t[1] for t in items[offset:offset + limit]],
             "metadatas": [t[2] for t in items[offset:offset + limit]],
         }
+
+
+class FakeHeadSortedStore(FakeStratifiedStore):
+    """PrimeKG rows grouped by head, matching kg.csv physical ordering."""
+
+    def __init__(self, n_heads=400):
+        self.docs, self.ids, self.metas = [], [], []
+        for head_i in range(n_heads):
+            for rel_i, relation in enumerate(runner.TRIPLE_RELATION_STRATA):
+                head = f"Drug{head_i:04d}"
+                doc_id = f"edge_{head_i:04d}_{rel_i}"
+                self.docs.append(
+                    f"{head} {relation.replace('_', ' ')} Target{head_i}_{rel_i} "
+                    "in the context of clinical evidence and therapeutic use."
+                )
+                self.ids.append(doc_id)
+                self.metas.append({"relation": relation, "head_name": head,
+                                   "source": "", "doc_type": ""})
+        self.docs.extend(
+            [("Clinical trial evidence for therapy of condition " + "C" * 220)
+             for _ in range(n_heads)]
+        )
+        self.ids.extend([f"pmc_{i}" for i in range(n_heads)])
+        self.metas.extend([{"source": "pmc", "doc_id": f"PMC{i}",
+                            "relation": "", "head_name": ""}
+                           for i in range(n_heads)])
+        self._docs = list(zip(self.docs, self.ids, self.metas))
+
+
+def test_sorted_by_head_store_yields_diverse_pool_chunks():
+    import random
+
+    store = FakeHeadSortedStore()
+    chunks = runner._fetch_stratified_chunks(store, 20, "test", random.Random(42))
+    dev_chunks = runner._fetch_stratified_chunks(store, 20, "dev", random.Random(42))
+    assert len(chunks) >= 40
+    assert {chunk["kind"] for chunk in chunks} == {"pmc", "primekg"}
+    assert len({chunk["id"] for chunk in chunks}) == len(chunks)
+    assert len({chunk["doc"].split()[0] for chunk in chunks
+                if chunk["kind"] == "primekg"}) >= 10
+    assert all(runner._question_pool_of(chunk["id"], "test") for chunk in chunks)
+    assert {chunk["id"] for chunk in chunks}.isdisjoint(
+        {chunk["id"] for chunk in dev_chunks})
 
 
 def test_generated_questions_are_written_to_cache(cache_env, monkeypatch):
@@ -197,3 +269,16 @@ def test_questions_come_from_distinct_chunks(cache_env, monkeypatch):
 def test_invalid_pool_rejected(cache_env):
     with pytest.raises(ValueError, match="pool"):
         runner.generate_paper_protocol_questions(5, pool="train")
+
+
+def test_question_cache_path_is_pool_specific(cache_env):
+    assert runner._paper_question_cache_path(50, "dev").name.endswith("_dev.json")
+    assert runner._paper_question_cache_path(50, "test").name.endswith("_test.json")
+
+
+def test_question_set_id_is_stable_and_changes_with_the_set():
+    samples = [{"question": "q1", "source_chunk_id": "chunk1", "pool": "test"}]
+    same_set = [{"question": "q1", "source_chunk_id": "chunk1", "pool": "test"}]
+    other_set = [{"question": "q1", "source_chunk_id": "chunk2", "pool": "test"}]
+    assert runner._question_set_id(samples) == runner._question_set_id(same_set)
+    assert runner._question_set_id(samples) != runner._question_set_id(other_set)

@@ -11,6 +11,7 @@ from src.evaluation.run_base_paper_benchmark import (
     CORRECTNESS_THRESHOLD,
     RETRIEVAL_K,
     _content_tokens,
+    _completed_questions_from_checkpoint,
     _context_document,
     _ranked_relevance,
     _records_from_checkpoint,
@@ -85,6 +86,43 @@ class TestRankedRelevance:
 
 
 class TestRecordsFromCheckpoint:
+    def test_resume_skip_set_is_scoped_to_question_pool(self, tmp_path):
+        ckpt = tmp_path / "base_paper_checkpoint.jsonl"
+        dev = _record("same question")
+        dev["question_pool"] = "dev"
+        dev["question_set_id"] = "set-a"
+        test = _record("same question", overall_hcad=90.0)
+        test["question_pool"] = "test"
+        test["question_set_id"] = "set-a"
+        ckpt.write_text(json.dumps(dev) + "\n" + json.dumps(test) + "\n",
+                        encoding="utf-8")
+
+        assert _completed_questions_from_checkpoint(ckpt, "dev", "set-a") == {
+            "same question"
+        }
+        assert _completed_questions_from_checkpoint(ckpt, "dev", "set-b") == set()
+
+    def test_checkpoint_records_are_scoped_to_question_pool(self, tmp_path):
+        ckpt = tmp_path / "base_paper_checkpoint.jsonl"
+        dev = _record("same question")
+        dev["question_pool"] = "dev"
+        dev["question_set_id"] = "set-a"
+        test = _record("same question", overall_hcad=90.0)
+        test["question_pool"] = "test"
+        test["question_set_id"] = "set-a"
+        with open(ckpt, "w", encoding="utf-8") as f:
+            f.write(json.dumps(dev) + "\n")
+            f.write(json.dumps(test) + "\n")
+
+        records = _records_from_checkpoint(
+            ckpt, {"same question"}, question_pool="dev", question_set_id="set-a"
+        )
+        assert records["scoring"]["HCAD-RAG"][0]["overall_score"] == 80.0
+        other_set = _records_from_checkpoint(
+            ckpt, {"same question"}, question_pool="dev", question_set_id="set-b"
+        )
+        assert other_set["scoring"]["HCAD-RAG"] == []
+
     def test_resumed_questions_are_included(self, tmp_path):
         ckpt = tmp_path / "base_paper_checkpoint.jsonl"
         with open(ckpt, "w", encoding="utf-8") as f:
