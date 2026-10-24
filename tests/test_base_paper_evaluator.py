@@ -197,7 +197,11 @@ class TestBasePaperEvaluator(unittest.TestCase):
             client = UnifiedLLMClient(model=JUDGE_HF_MODEL, provider="huggingface")
             client._hf_client = MagicMock()
             client._hf_client.chat.completions.create.side_effect = RuntimeError("offline")
-            with patch("time.sleep"):
+            # Kaggle may have a real Ollama HTTP server running. Force the
+            # HTTP path offline so this test reaches the mocked SDK fallback.
+            with patch("time.sleep"), patch(
+                "src.core.llm_client.requests.post", side_effect=RuntimeError("offline")
+            ):
                 response = client.chat([{"role": "user", "content": "test"}])
 
         self.assertEqual(response, '{"ok": true}')
