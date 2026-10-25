@@ -9,10 +9,11 @@ than the one every successful run used.
 """
 
 def test_pinned_low_level_stack():
-    import murmurhash
+    from importlib.metadata import version
     import numpy
-    assert murmurhash.__version__ == "1.0.12", (
-        f"murmurhash {murmurhash.__version__}: expected the pinned 1.0.12 "
+    murmurhash_version = version("murmurhash")
+    assert murmurhash_version == "1.0.12", (
+        f"murmurhash {murmurhash_version}: expected the pinned 1.0.12 "
         "- newer builds return unsigned 64-bit hashes that overflow the "
         "ssize_t keys in spacy 3.8.11's tokenizer specials (PreshMap), "
         "which is the Oct 25 scispacy load failure")

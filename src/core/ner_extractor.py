@@ -133,13 +133,18 @@ class BiomedicalNER:
                     break
                 except Exception as exc:
                     if attempt == attempts:
-                        import murmurhash
+                        from importlib.metadata import version as _pkg_version
                         import numpy
+                        try:
+                            _stack = (f"murmurhash {_pkg_version('murmurhash')}, "
+                                      f"numpy {numpy.__version__}, "
+                                      f"spacy {spacy.__version__}")
+                        except Exception:
+                            _stack = "(version lookup failed)"
                         logger.warning(
                             "Failed to load %s after %d attempts. "
-                            "Resolved stack: murmurhash %s, numpy %s, spacy %s.",
-                            name, attempts, murmurhash.__version__,
-                            numpy.__version__, spacy.__version__,
+                            "Resolved stack: %s.",
+                            name, attempts, _stack,
                             exc_info=True)
                         self.degraded = True
                     else:
