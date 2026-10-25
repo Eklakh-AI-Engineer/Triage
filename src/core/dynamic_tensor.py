@@ -61,6 +61,74 @@ def make_query_features(
     return torch.tensor(feats, dtype=torch.float32)
 
 
+class ChannelWeightAdapter(nn.Module):
+    """Low-rank query-adaptive channel weights a(Q) (Critical Review, rank 8).
+
+    Learns ONLY the 3 component weights (alpha, beta, gamma) from the
+    25-dimensional normalized query features (~78 parameters). The full
+    hypernetwork's 768-dim lambda head is deliberately dropped: its block
+    weights largely cancel in the weighted-cosine denominator, and a
+    ~200K-parameter hypernetwork overfits 60-question dev pools. Lambda
+    stays isotropic (uniform 1/d) when this adapter is active.
+    """
+
+    def __init__(self, feat_dim: int = 25):
+        super().__init__()
+        self.feat_dim = feat_dim
+        self.head = nn.Linear(feat_dim, 3)
+        nn.init.zeros_(self.head.weight)
+        nn.init.zeros_(self.head.bias)  # softmax(0,0,0) = uniform start
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(self.head(feats), dim=-1)
+
+
+class LoadedChannelAdapter:
+    """Callable matching the QueryAdaptiveAnisotropicTensor interface.
+
+    __call__(Q, feats) -> (lam, a) with lam fixed to the isotropic uniform
+    vector, so the retriever's learned branch needs no changes to consume
+    a channel-adapter checkpoint.
+    """
+
+    def __init__(self, adapter: ChannelWeightAdapter, embed_dim: int = 768):
+        self.adapter = adapter
+        self.embed_dim = embed_dim
+
+    def __call__(self, Q: torch.Tensor, feats: torch.Tensor):
+        a = self.adapter(feats)
+        lam = torch.full((self.embed_dim,), 1.0 / self.embed_dim)
+        return lam, a
+
+
+def save_channel_adapter(adapter: ChannelWeightAdapter, path=None) -> str:
+    """Persist the trained channel-weight adapter with a kind tag."""
+    from src.config import TENSOR_MODEL_PATH
+    path = path or TENSOR_MODEL_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        "kind": "channel_adapter",
+        "feat_dim": adapter.feat_dim,
+        "state": adapter.state_dict(),
+    }, path)
+    return str(path)
+
+
+def load_channel_adapter(path=None) -> LoadedChannelAdapter:
+    """Load a channel-adapter checkpoint; raises if it is another kind."""
+    from src.config import TENSOR_MODEL_PATH
+    path = path or TENSOR_MODEL_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"No trained tensor at {path}")
+    ckpt = torch.load(path, map_location="cpu")
+    if not isinstance(ckpt, dict) or ckpt.get("kind") != "channel_adapter":
+        raise ValueError("checkpoint is not a channel_adapter")
+    adapter = ChannelWeightAdapter(feat_dim=int(ckpt.get("feat_dim", 25)))
+    adapter.load_state_dict(ckpt["state"])
+    adapter.eval()
+    return LoadedChannelAdapter(adapter)
+
+
 def save_tensor(model: "QueryAdaptiveAnisotropicTensor", path=None) -> str:
     """Persist the trained hypernetwork (only trainable weights)."""
     import torch
@@ -71,14 +139,25 @@ def save_tensor(model: "QueryAdaptiveAnisotropicTensor", path=None) -> str:
     return str(path)
 
 
-def load_tensor(path=None) -> "QueryAdaptiveAnisotropicTensor":
-    """Load a trained hypernetwork; raises if no checkpoint exists."""
+def load_tensor(path=None):
+    """Load a learned tensor checkpoint of either kind.
+
+    Returns a callable (Q, feats) -> (lam, a): the full hypernetwork for
+    legacy raw state_dicts, or the isotropic-lambda channel adapter for
+    kind-tagged checkpoints. The retriever consumes both identically.
+    """
     import torch
     from src.config import TENSOR_MODEL_PATH
     path = path or TENSOR_MODEL_PATH
     if not path.exists():
         raise FileNotFoundError(f"No trained tensor at {path}")
+    ckpt = torch.load(path, map_location="cpu")
+    if isinstance(ckpt, dict) and ckpt.get("kind") == "channel_adapter":
+        adapter = ChannelWeightAdapter(feat_dim=int(ckpt.get("feat_dim", 25)))
+        adapter.load_state_dict(ckpt["state"])
+        adapter.eval()
+        return LoadedChannelAdapter(adapter)
     model = QueryAdaptiveAnisotropicTensor()
-    model.load_state_dict(torch.load(path, map_location="cpu"))
+    model.load_state_dict(ckpt)
     model.eval()
     return model

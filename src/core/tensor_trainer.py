@@ -1,19 +1,33 @@
-"""REINFORCE training for the Query-Adaptive Anisotropic Tensor (Blueprint 5.1).
+"""Listwise training of the query-adaptive channel weights (Blueprint 5.1, v2).
 
-Fairness contract:
+Fairness contract (unchanged):
 - trains ONLY on the dev question pool (generate_paper_protocol_questions
-  with pool="dev"), which is hash-disjoint from the evaluation (test) pool;
-- the reward is retrieval quality (NDCG@5 against the question's gold source
-  chunk) - no LLM judge in the training loop, so the judge cannot bias what
-  is learned and the signal is cheap and explainable;
+  with pool="dev"), which is article/entity-hash-disjoint from the
+  evaluation (test) pool;
+- no LLM judge in the training loop: the supervision signal is the binary
+  gold-chunk relevance of each retrieved candidate, so the judge cannot
+  bias what is learned;
 - the learned weights are saved to models/dynamic_tensor.pt and loaded only
   when HCAD_TENSOR_MODE=learned; the static heuristic remains the default.
 
-Training loop: for each dev question the hypernetwork predicts (lambda, a);
-Gaussian exploration noise is added (reparameterized), the retriever ranks
-candidates under the sampled weights via the documented _tensor_override
-hook, the NDCG@5 reward is measured, and a baseline-subtracted REINFORCE
-step updates the hypernetwork.
+Why this replaced the REINFORCE loop: the previous trainer was
+mathematically incapable of learning. Its score function summed
+simplex-normalized differences, gl = sum((lam_s - mu_lam)/sigma^2), which is
+identically zero because both vectors lie on the unit simplex - and the
+sampled action was never detached into a log-density surrogate. The model
+backpropagated floating-point noise (Critical Research Review, gradient
+collapse proof).
+
+What trains now: a low-rank ChannelWeightAdapter (~78 parameters) that
+predicts the 3 component weights a(Q) = (alpha, beta, gamma) from the
+25-dimensional normalized query features, with lambda held isotropic
+(uniform 1/d). Per-channel similarities S(Q, C_i) do not depend on a, so
+each dev question yields a fixed (N, 3) matrix and the listwise InfoNCE
+loss over Phi = S @ a has exact, low-variance gradients. The 768-dim
+lambda head of the old hypernetwork is deliberately dropped: its block
+weights largely cancel in the weighted-cosine denominator and a ~200K-
+parameter hypernetwork overfits 60-question dev pools (Critical Review,
+rank-8 recommendation).
 """
 
 from __future__ import annotations
@@ -21,9 +35,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import numpy as np
 import torch
 
-from src.config import TENSOR_MODEL_PATH
+from src.config import (
+    SCORE_WEIGHT_ENTITY,
+    SCORE_WEIGHT_MODIFIER,
+    SCORE_WEIGHT_RELATION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,32 +60,31 @@ def train_tensor(
     retriever,
     dev_questions: list[dict],
     epochs: int = 3,
-    sigma: float = 0.10,
-    lr: float = 1e-3,
+    lr: float = 5e-3,
     k: int = 5,
+    tau: float = 0.15,
     save_path: Path | None = None,
 ) -> dict:
-    """Train the query-adaptive anisotropic tensor on dev-pool questions.
+    """Train the query-adaptive channel weights on dev-pool questions.
 
     Args:
-        retriever: a constructed HCADRetriever (components are loaded on
-            first retrieve; the trainer activates the learned branch by
-            assigning ``retriever._tensor`` directly).
+        retriever: a constructed HCADRetriever. The warm-up pass runs under
+            an explicit isotropic-lambda / static-weights override so the
+            retriever captures feats and the per-channel similarity matrix
+            (its learned branch records both - see HCADRetriever).
         dev_questions: paper-protocol questions with pool="dev"
             (each carries "question" and "reference").
         epochs: passes over the dev set.
-        sigma: exploration noise scale.
-        lr: Adam learning rate.
-        k: NDCG cut for the reward.
+        lr: Adam learning rate for the adapter head.
+        k: NDCG cut for the per-epoch telemetry reward.
+        tau: InfoNCE temperature over Phi scores.
         save_path: checkpoint destination (default models/dynamic_tensor.pt).
 
     Returns:
-        dict with mean reward per epoch and the checkpoint path.
+        dict with per-epoch telemetry (mean NDCG reward, mean gradient
+        norm) and the checkpoint path.
     """
-    from src.core.dynamic_tensor import (
-        QueryAdaptiveAnisotropicTensor,
-        save_tensor,
-    )
+    from src.core.dynamic_tensor import ChannelWeightAdapter, save_channel_adapter
     from src.evaluation.metrics import ndcg_at_k
     from src.evaluation.run_base_paper_benchmark import _ranked_relevance
 
@@ -80,77 +98,89 @@ def train_tensor(
             "Training on test-pool questions would leak the evaluation set."
         )
 
-    tensor = QueryAdaptiveAnisotropicTensor(embed_dim=768, feat_dim=25)
-    retriever._tensor = tensor          # activate the learned ranking branch
-    retriever._tensor_override = None
-    optimizer = torch.optim.Adam(tensor.parameters(), lr=lr)
+    embed_dim = 768
+    uniform_lam = torch.full((embed_dim,), 1.0 / embed_dim, dtype=torch.float32)
+    static_a = torch.tensor(
+        [SCORE_WEIGHT_ENTITY, SCORE_WEIGHT_RELATION, SCORE_WEIGHT_MODIFIER],
+        dtype=torch.float32)
 
-    baseline = 0.0
-    history = []
+    adapter = ChannelWeightAdapter(feat_dim=25)
+    optimizer = torch.optim.Adam(adapter.parameters(), lr=lr)
+    retriever._tensor = None
+    retriever._tensor_override = None
+
+    history: list[dict] = []
     for epoch in range(epochs):
-        rewards = []
+        rewards: list[float] = []
+        grad_norms: list[float] = []
         for item in dev_questions:
             question = item["question"]
             reference = item["reference"]
 
-            # 1) one ranking pass without override: populates
-            #    _last_tensor_inputs with (Q, feats) for this question.
-            retriever._tensor_override = None
+            # 1) warm-up retrieval under uniform lambda + static channel
+            #    weights: the retriever's learned branch records
+            #    (Q, feats) and the per-channel similarity matrix for
+            #    this (query, candidate pool) pair.
+            retriever._tensor_override = (uniform_lam, static_a)
             try:
-                retriever.retrieve(question)
+                contexts = retriever.retrieve(question)
             except Exception as exc:
                 logger.warning("Warm-up retrieval failed for a dev question "
                                "(%s); skipping it.", exc)
                 continue
-            inputs = getattr(retriever, "_last_tensor_inputs", None)
-            if inputs is None:
-                continue
-            Q_t, feats = inputs
-
-            # 2) predict mean weights; sample exploration noise.
-            optimizer.zero_grad()
-            mu_lam, mu_a = tensor(Q_t, feats)
-            eps_lam = torch.randn_like(mu_lam)
-            lam_s = mu_lam + sigma * eps_lam
-            lam_s = lam_s / lam_s.sum().clamp_min(1e-6)
-            a_s = torch.softmax(
-                torch.log(mu_a.clamp_min(1e-6)) + sigma * torch.randn_like(mu_a),
-                dim=-1)
-
-            # 3) rank under the sampled weights and measure the reward.
-            retriever._tensor_override = (lam_s.detach(), a_s.detach())
-            try:
-                contexts = retriever.retrieve(question)
-            except Exception as exc:
-                logger.warning("Sampled retrieval failed (%s); reward 0.", exc)
-                contexts = []
             finally:
                 retriever._tensor_override = None
-            relevance = _ranked_relevance(reference, contexts)
-            reward = float(ndcg_at_k(relevance, k))
-            rewards.append(reward)
+            inputs = getattr(retriever, "_last_tensor_inputs", None)
+            sims = getattr(retriever, "_last_channel_sims", None)
+            if inputs is None or sims is None or not contexts:
+                continue
+            _Q_t, feats = inputs
 
-            # 4) baseline-subtracted REINFORCE step.
-            #    grad log N(s | mu, sigma) = (s - mu) / sigma^2
-            gl = ((lam_s - mu_lam) / (sigma ** 2)).sum()
-            ga = ((a_s - mu_a) / (sigma ** 2)).sum()
-            loss = -(reward - baseline) * (gl + ga)
+            # 2) binary gold relevance per candidate (no LLM judge).
+            relevance = _ranked_relevance(reference, contexts)
+            positives = [i for i, r in enumerate(relevance) if r]
+            if not positives:
+                # The gold chunk is not in this candidate pool: the pair
+                # carries no listwise signal for the channel weights.
+                continue
+
+            S = torch.tensor(np.asarray(sims, dtype=np.float32))   # (N, 3)
+            y = torch.tensor([1.0 if r else 0.0 for r in relevance],
+                             dtype=torch.float32)                    # (N,)
+
+            # 3) exact differentiable listwise loss: push the adapter's
+            #    Phi = S @ a(Q) above the pool's non-gold candidates.
+            a = adapter(feats)                       # (3,)
+            phi = S @ a                               # (N,)
+            logp = torch.log_softmax(phi / tau, dim=-1)
+            loss = -logp[positives].mean()
+
+            optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(tensor.parameters(), max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                adapter.parameters(), max_norm=1.0)
+            grad_norms.append(float(grad_norm))
             optimizer.step()
-            baseline = 0.9 * baseline + 0.1 * reward
+
+            # 4) telemetry: NDCG@k of the pool re-ranked by the CURRENT
+            #    channel weights (comparable to the old trainer's reward).
+            order = torch.argsort(phi.detach(), descending=True)
+            ranked_rel = [float(y[i]) for i in order]
+            rewards.append(float(ndcg_at_k(ranked_rel, k)))
 
         mean_reward = _mean_reward(rewards, epoch + 1)
+        mean_grad = sum(grad_norms) / max(len(grad_norms), 1)
         history.append({"epoch": epoch + 1, "mean_ndcg_reward": mean_reward,
-                        "n": len(rewards)})
+                        "n": len(rewards), "mean_grad_norm": round(mean_grad, 6)})
         logger.info("Tensor training epoch %d/%d: mean NDCG@%d reward %.4f "
-                    "(%d questions)", epoch + 1, epochs, k, mean_reward,
-                    len(rewards))
+                    "(%d questions, mean grad-norm %.4f)",
+                    epoch + 1, epochs, k, mean_reward, len(rewards), mean_grad)
 
     retriever._tensor = None  # trainer never leaks the active tensor
-    path = save_tensor(tensor, save_path)
-    logger.info("Trained tensor saved to %s", path)
-    return {"epochs": history, "checkpoint": str(path)}
+    path = save_channel_adapter(adapter, save_path)
+    logger.info("Trained channel-weight adapter saved to %s", path)
+    return {"epochs": history, "checkpoint": str(path),
+            "n_trained": len(rewards)}
 
 
 def load_tensor_for_ablation(retriever) -> bool:
