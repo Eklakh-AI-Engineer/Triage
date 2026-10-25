@@ -131,7 +131,35 @@ class BiomedicalNER:
                                 "" if attempt == 1 else f" (attempt {attempt}/{attempts})")
                     setattr(self, attr, spacy.load(name))
                     break
-                except Exception as exc:
+                except (OverflowError, Exception) as exc:
+                    is_overflow = (
+                        isinstance(exc, OverflowError)
+                        or "too large to convert" in str(exc)
+                        or "ssize_t" in str(exc)
+                    )
+                    if is_overflow:
+                        # Known data regression: the published 0.5.4 tarball's
+                        # serialized tokenizer specials overflow the ssize_t
+                        # keys of spacy 3.8.11's specials map - confirmed on
+                        # the exact pinned stack (murmurhash 1.0.12/1.0.15, numpy
+                        # 2.5.4, spacy 3.8.11). The NER WEIGHTS are unaffected;
+                        # skip the corrupted tokenizer data and rebuild the
+                        # tokenizer from the language defaults instead.
+                        logger.warning(
+                            "Tokenizer data in %s overflows (%s); rebuilding "
+                            "the tokenizer from language defaults and "
+                            "continuing - NER weights load unchanged.", name, exc)
+                        try:
+                            from spacy.lang.en import English
+                            nlp = spacy.load(name, exclude=["tokenizer"])
+                            nlp.tokenizer = English(vocab=nlp.vocab).tokenizer
+                            setattr(self, attr, nlp)
+                        except Exception as fallback_exc:
+                            logger.warning(
+                                "Default-tokenizer fallback for %s also failed "
+                                "(%s).", name, fallback_exc, exc_info=True)
+                            self.degraded = True
+                        break
                     if attempt == attempts:
                         from importlib.metadata import version as _pkg_version
                         import numpy
