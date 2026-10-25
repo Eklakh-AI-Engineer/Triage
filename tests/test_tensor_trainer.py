@@ -113,6 +113,13 @@ def test_train_tensor_end_to_end_with_fake_retriever(tmp_path, monkeypatch):
 
     ckpt = tmp_path / "dynamic_tensor.pt"
     monkeypatch.setattr("src.config.TENSOR_MODEL_PATH", ckpt)
+    # Unit tests must not depend on the process-wide NER singleton: real
+    # scispacy loads take ~25 s and can transiently fail (degrading the
+    # singleton and tripping the trainer's feature-parity guard, which is
+    # correct in production but is test pollution here).
+    from types import SimpleNamespace
+    monkeypatch.setattr("src.core.ner_extractor.get_biomedical_ner",
+                        lambda: SimpleNamespace(degraded=False))
 
     class FakeRetriever:
         def __init__(self):
@@ -185,6 +192,9 @@ def test_misaligned_sims_and_pool_skip_instead_of_crashing(tmp_path, monkeypatch
 
     monkeypatch.setattr("src.config.TENSOR_MODEL_PATH",
                         tmp_path / "dynamic_tensor.pt")
+    from types import SimpleNamespace
+    monkeypatch.setattr("src.core.ner_extractor.get_biomedical_ner",
+                        lambda: SimpleNamespace(degraded=False))
 
     class MisalignedRetriever:
         def __init__(self):
