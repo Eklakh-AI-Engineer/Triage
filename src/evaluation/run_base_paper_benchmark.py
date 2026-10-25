@@ -253,7 +253,8 @@ def _records_from_checkpoint(
                         by_question[record["question"]] = record  # later lines win
 
     scoring = {"Baseline LLM": [], "Vanilla RAG": [], "HCAD-RAG": []}
-    selection = {"HCAD_vs_Vanilla": [], "HCAD_vs_Baseline": []}
+    selection = {"HCAD_vs_Vanilla": [], "HCAD_vs_Baseline": [],
+                 "Vanilla_vs_Baseline": []}
     latency = {"Vanilla RAG": [], "HCAD-RAG": []}
     retrieval = {"Vanilla RAG": [], "HCAD-RAG": []}
     citations = {"Vanilla RAG": [], "HCAD-RAG": []}
@@ -756,8 +757,25 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         )
         sel_base = _merge_selection_results(sel_base_ab, sel_base_ba, "HCAD-RAG")
 
-        logger.info("  Selection - HCAD vs Vanilla: %s, HCAD vs Baseline: %s",
-                     sel_van.get("overall_winner"), sel_base.get("overall_winner"))
+        # Tri-arm protocol: the baseline arm must appear in every selection
+        # comparison - add the vanilla-vs-baseline pair (2 extra judge calls
+        # per question) so the win-rate matrix covers all three pairings.
+        sel_vb_ab = evaluator.evaluate_selection(
+            q, resp_vanilla, resp_baseline, ref,
+            label_a="Vanilla RAG", label_b="Baseline LLM",
+            evidence_a=vanilla_evidence,
+        )
+        sel_vb_ba = evaluator.evaluate_selection(
+            q, resp_baseline, resp_vanilla, ref,
+            label_a="Baseline LLM", label_b="Vanilla RAG",
+            evidence_b=vanilla_evidence,
+        )
+        sel_vb = _merge_selection_results(sel_vb_ab, sel_vb_ba, "Vanilla RAG")
+
+        logger.info("  Selection - HCAD vs Vanilla: %s, HCAD vs Baseline: %s, "
+                     "Vanilla vs Baseline: %s",
+                     sel_van.get("overall_winner"), sel_base.get("overall_winner"),
+                     sel_vb.get("overall_winner"))
 
         # per-sample checkpoint with full provenance
         with open(checkpoint_path, "a", encoding="utf-8") as ckpt:
@@ -777,6 +795,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                 "selection": {
                     "HCAD_vs_Vanilla": sel_van,
                     "HCAD_vs_Baseline": sel_base,
+                    "Vanilla_vs_Baseline": sel_vb,
                 },
                 "latency": {
                     "Vanilla RAG": t_vanilla_ret,
@@ -828,6 +847,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                     criteria_wins[c] += 1
 
         return {
+            "target_system": target_label,
             "overall_win_rate_pct": (overall_wins / total) * 100.0,
             "tie_rate_pct": (ties / total) * 100.0,
             "decisive_win_rate_pct": (
@@ -837,14 +857,22 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             "criteria_win_rates_pct": {c: (cnt / total) * 100.0 for c, cnt in criteria_wins.items()},
         }
 
+    # Tri-arm protocol: each pairing's win rate is reported from its first
+    # arm's perspective (HCAD for the two HCAD pairs, Vanilla for the
+    # vanilla-vs-baseline pairing).
+    selection_targets = {
+        "HCAD_vs_Vanilla": "HCAD-RAG",
+        "HCAD_vs_Baseline": "HCAD-RAG",
+        "Vanilla_vs_Baseline": "Vanilla RAG",
+    }
     final_win_rates = {
-        comparison: calc_win_rate(recs, "HCAD-RAG")
-        for comparison, recs in records["selection"].items()
+        comparison: calc_win_rate(recs, selection_targets.get(comparison, "HCAD-RAG"))
+        for comparison, recs in records["selection"].items() if recs
     }
     win_rates_by_source = {
         source: {
-            comparison: calc_win_rate(recs, "HCAD-RAG")
-            for comparison, recs in comparisons.items()
+            comparison: calc_win_rate(recs, selection_targets.get(comparison, "HCAD-RAG"))
+            for comparison, recs in comparisons.items() if recs
         }
         for source, comparisons in records["selection_by_source"].items()
     }
@@ -853,6 +881,9 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         sys_name: sum(lats) / len(lats) if lats else 0.0
         for sys_name, lats in records["latency"].items()
     }
+    # Tri-arm protocol: the no-retrieval baseline sits at 0.0s by definition.
+    if "Baseline LLM" in final_scores:
+        avg_latencies.setdefault("Baseline LLM", 0.0)
 
     # Robustness metric 1+2: NDCG@K / Recall@K over paper-protocol samples.
     retrieval_quality: Dict[str, Any] = {
@@ -881,6 +912,18 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             "mean_precision": (
                 round(sum(precisions) / len(precisions), 4) if precisions else None
             ),
+        }
+
+    # Tri-arm protocol: the baseline arm is the zero-citation ungrounded
+    # reference point (0% citation coverage, 0 citations) - it must appear
+    # in the citation comparison, not just Vanilla vs HCAD.
+    if "Baseline LLM" not in citation_summary:
+        n_baseline = len(records["scoring"].get("Baseline LLM", []))
+        citation_summary["Baseline LLM"] = {
+            "n_answers_with_citations": 0,
+            "n_answers": n_baseline,
+            "total_citations": 0,
+            "mean_precision": None,
         }
 
     # Robustness metric 4: exact McNemar test on paired per-question
