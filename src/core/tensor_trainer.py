@@ -132,12 +132,24 @@ def train_tensor(
                 retriever._tensor_override = None
             inputs = getattr(retriever, "_last_tensor_inputs", None)
             sims = getattr(retriever, "_last_channel_sims", None)
-            if inputs is None or sims is None or not contexts:
+            pool = getattr(retriever, "_last_candidate_pool", None)
+            if inputs is None or sims is None or not pool:
+                continue
+            # The sims matrix is computed over the PRE-GATE candidate pool;
+            # the listwise loss therefore runs over that same pool (gold
+            # may be present but gated out - the loss must be able to teach
+            # the channel weights to rank it back in). Hard alignment guard:
+            # rows must match the pool exactly or the pair is unusable.
+            if len(pool) != len(np.asarray(sims)):
+                logger.warning(
+                    "Channel sims (%d rows) misaligned with candidate pool "
+                    "(%d items); skipping this question.",
+                    len(np.asarray(sims)), len(pool))
                 continue
             _Q_t, feats = inputs
 
             # 2) binary gold relevance per candidate (no LLM judge).
-            relevance = _ranked_relevance(reference, contexts)
+            relevance = _ranked_relevance(reference, pool)
             positives = [i for i, r in enumerate(relevance) if r]
             if not positives:
                 # The gold chunk is not in this candidate pool: the pair

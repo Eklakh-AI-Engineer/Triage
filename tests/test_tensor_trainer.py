@@ -120,6 +120,7 @@ def test_train_tensor_end_to_end_with_fake_retriever(tmp_path, monkeypatch):
             self._tensor_override = None
             self._last_tensor_inputs = None
             self._last_channel_sims = None
+            self._last_candidate_pool = None
             self.calls = 0
 
         def retrieve(self, question):
@@ -130,15 +131,19 @@ def test_train_tensor_end_to_end_with_fake_retriever(tmp_path, monkeypatch):
             assert abs(float(lam.sum()) - 1.0) < 1e-5
             self._last_tensor_inputs = (
                 torch.zeros(3, 768), torch.rand(25))
-            # gold candidates separate on the relation channel
+            # gold candidates separate on the relation channel; the sims
+            # rows and the PRE-GATE candidate pool must stay index-aligned
+            # exactly as the real retriever guarantees them.
             self._last_channel_sims = np.array(
                 [[0.2, 0.9, 0.1], [0.9, 0.2, 0.1], [0.1, 0.2, 0.9]],
                 dtype=np.float32)
-            # _ranked_relevance reads contexts as dicts (document key),
+            # _ranked_relevance reads candidates as dicts (document key),
             # mirroring the real retriever's output contract.
-            return [{"document": "gold text about the association"},
-                    {"document": "distractor one"},
-                    {"document": "distractor two"}]
+            self._last_candidate_pool = [
+                {"document": "gold text about the association"},
+                {"document": "distractor one"},
+                {"document": "distractor two"}]
+            return list(self._last_candidate_pool)
 
     fake = FakeRetriever()
     dev = [{"question": "What is the association?",
@@ -166,3 +171,40 @@ def test_train_tensor_refuses_non_dev_pools():
     test_q = [{"question": "q", "reference": "r", "pool": "test"}]
     with pytest.raises(ValueError, match="non-dev"):
         train_tensor(retriever=object(), dev_questions=test_q, epochs=1)
+
+
+def test_misaligned_sims_and_pool_skip_instead_of_crashing(tmp_path, monkeypatch):
+    """Regression for the first Kaggle training crash (IndexError: sims
+    had pre-gate rows, relevance had post-gate contexts). Misalignment
+    must skip the question loudly; an epoch with nothing usable must
+    fail via the empty-rewards guard, never crash."""
+    import numpy as np
+    import torch
+
+    from src.core.tensor_trainer import train_tensor
+
+    monkeypatch.setattr("src.config.TENSOR_MODEL_PATH",
+                        tmp_path / "dynamic_tensor.pt")
+
+    class MisalignedRetriever:
+        def __init__(self):
+            self._tensor = None
+            self._tensor_override = None
+            self._last_tensor_inputs = None
+            self._last_channel_sims = None
+            self._last_candidate_pool = None
+
+        def retrieve(self, question):
+            self._tensor_override = (
+                torch.full((768,), 1.0 / 768), torch.tensor([0.3, 0.5, 0.2]))
+            self._last_tensor_inputs = (
+                torch.zeros(3, 768), torch.rand(25))
+            # sims claim 28 candidates (pre-gate), pool has 5 (post-gate)
+            self._last_channel_sims = np.random.rand(28, 3).astype(np.float32)
+            self._last_candidate_pool = [
+                {"document": f"candidate {i}"} for i in range(5)]
+            return list(self._last_candidate_pool)
+
+    dev = [{"question": "q", "reference": "candidate 1", "pool": "dev"}]
+    with pytest.raises(RuntimeError, match="produced no rewards"):
+        train_tensor(MisalignedRetriever(), dev, epochs=1)

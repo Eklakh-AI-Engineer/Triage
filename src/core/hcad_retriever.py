@@ -94,6 +94,7 @@ class HCADRetriever:
         self._tensor_override: Optional[tuple] = None
         self._last_tensor_inputs: Optional[tuple] = None
         self._last_channel_sims: Optional["np.ndarray"] = None
+        self._last_candidate_pool: Optional[list] = None
 
     def _handle_vector_error(self, exc: Exception) -> None:
         logger.warning("Vector store retrieval failed: %s", exc)
@@ -565,9 +566,14 @@ class HCADRetriever:
             )
             # Per-channel similarities for this (query, candidate pool)
             # pair: the listwise trainer learns the query-adaptive channel
-            # weights over exactly these columns.
+            # weights over exactly these columns. The PRE-GATE candidate
+            # pool is stashed too, index-aligned with the sims rows - the
+            # trainer's listwise loss runs over the full pool (gold may be
+            # present but gated out, and the loss must be able to teach the
+            # channel weights to rank it back in).
             self._last_channel_sims = self._transformer.compute_channel_similarities(
                 Q, C_batch, weights)
+            self._last_candidate_pool = list(candidates)
         else:
             phi_scores = self._transformer.compute_batch_component_similarities(
                 Q, C_batch, weights
