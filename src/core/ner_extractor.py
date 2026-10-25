@@ -133,8 +133,14 @@ class BiomedicalNER:
                     break
                 except Exception as exc:
                     if attempt == attempts:
-                        logger.warning("Failed to load %s after %d attempts.",
-                                       name, attempts, exc_info=True)
+                        import murmurhash
+                        import numpy
+                        logger.warning(
+                            "Failed to load %s after %d attempts. "
+                            "Resolved stack: murmurhash %s, numpy %s, spacy %s.",
+                            name, attempts, murmurhash.__version__,
+                            numpy.__version__, spacy.__version__,
+                            exc_info=True)
                         self.degraded = True
                     else:
                         logger.warning("Load attempt %d/%d for %s failed (%s); retrying.",
