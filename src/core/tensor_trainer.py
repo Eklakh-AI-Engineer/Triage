@@ -104,6 +104,20 @@ def train_tensor(
         [SCORE_WEIGHT_ENTITY, SCORE_WEIGHT_RELATION, SCORE_WEIGHT_MODIFIER],
         dtype=torch.float32)
 
+    # Feature-parity guard: the adapter learns query features derived from
+    # NER output. Training on the regex fallback while inference (session-3
+    # ablation) runs scispacy would learn a mismatched feature distribution
+    # - fail loudly instead of silently training on degraded features.
+    from src.core.ner_extractor import get_biomedical_ner
+    ner = get_biomedical_ner()
+    if getattr(ner, "degraded", False):
+        raise RuntimeError(
+            "SciSpacy NER failed to load (BiomedicalNER in degraded regex "
+            "mode). Refusing to train: the channel-weight adapter would "
+            "learn a feature distribution that differs from inference. "
+            "Re-run training; the loader now retries transient failures."
+        )
+
     adapter = ChannelWeightAdapter(feat_dim=25)
     optimizer = torch.optim.Adam(adapter.parameters(), lr=lr)
     retriever._tensor = None

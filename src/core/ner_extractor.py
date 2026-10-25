@@ -114,13 +114,33 @@ class BiomedicalNER:
             self._models_loaded = True
             return
 
+        import gc
+        import time
+
         for name, attr in ((bc5cdr_name, "_nlp_bc5cdr"), (jnlpba_name, "_nlp_jnlpba")):
-            try:
-                logger.info("Loading SciSpacy model: %s", name)
-                setattr(self, attr, spacy.load(name))
-            except Exception as exc:
-                logger.warning("Failed to load %s (%s).", name, exc)
-                self.degraded = True
+            # The observed Kaggle failure ("Python int too large to convert
+            # to C ssize_t" during spacy.load) is intermittent: the same
+            # models load fine in the test-suite and demo processes of the
+            # same session. Retry with a GC pause covers the transient
+            # class; the final failure keeps its full traceback so the
+            # persistent class can be root-caused from the log.
+            attempts = 3
+            for attempt in range(1, attempts + 1):
+                try:
+                    logger.info("Loading SciSpacy model: %s%s", name,
+                                "" if attempt == 1 else f" (attempt {attempt}/{attempts})")
+                    setattr(self, attr, spacy.load(name))
+                    break
+                except Exception as exc:
+                    if attempt == attempts:
+                        logger.warning("Failed to load %s after %d attempts.",
+                                       name, attempts, exc_info=True)
+                        self.degraded = True
+                    else:
+                        logger.warning("Load attempt %d/%d for %s failed (%s); retrying.",
+                                       attempt, attempts, name, exc)
+                    gc.collect()
+                    time.sleep(2.0)
 
         if self._nlp_bc5cdr is None and self._nlp_jnlpba is None:
             self._fallback = SimpleNER()
