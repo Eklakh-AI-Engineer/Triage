@@ -50,9 +50,12 @@ def test_old_simplex_score_function_is_identically_zero():
     lam_s = mu_lam + 0.10 * eps
     lam_s = lam_s / lam_s.sum()                     # projected back: sum == 1
     gl = ((lam_s - mu_lam) / (0.10 ** 2)).sum()
-    assert abs(float(gl)) < 1e-5, "simplex-sum score must be zero"
+    # float32 summation over 768 terms leaves ~1e-5 rounding residue;
+    # a live score would be O(1/sigma^2) - the point is it is dead, not
+    # bit-exact.
+    assert abs(float(gl)) < 1e-3, "simplex-sum score must be ~zero"
     gl.backward()
-    assert logits.grad is None or float(logits.grad.norm()) < 1e-6, \
+    assert logits.grad is None or float(logits.grad.norm()) < 1e-4, \
         "the old score function carries no gradient"
 
 
@@ -131,8 +134,11 @@ def test_train_tensor_end_to_end_with_fake_retriever(tmp_path, monkeypatch):
             self._last_channel_sims = np.array(
                 [[0.2, 0.9, 0.1], [0.9, 0.2, 0.1], [0.1, 0.2, 0.9]],
                 dtype=np.float32)
-            return ["gold text about the association",
-                    "distractor one", "distractor two"]
+            # _ranked_relevance reads contexts as dicts (document key),
+            # mirroring the real retriever's output contract.
+            return [{"document": "gold text about the association"},
+                    {"document": "distractor one"},
+                    {"document": "distractor two"}]
 
     fake = FakeRetriever()
     dev = [{"question": "What is the association?",
