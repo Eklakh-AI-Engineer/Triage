@@ -14,6 +14,7 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 MODELS_DIR = PROJECT_ROOT / "models"
 TENSOR_MODEL_PATH = MODELS_DIR / "dynamic_tensor.pt"
 TABLES_DIR = RESULTS_DIR / "tables"
+CACHE_DIR = RESULTS_DIR / "cache"
 FIGURES_DIR = RESULTS_DIR / "figures"
 
 for d in [RAW_DATA_DIR, PROCESSED_DATA_DIR, VECTORDB_DIR, TABLES_DIR, FIGURES_DIR]:
@@ -139,6 +140,64 @@ def tau_sat() -> float | None:
         except ValueError:
             return None
     return TAU_SAT
+
+
+# ---------------------------------------------------------------------------
+# Phase 4a: hub-degree bias correction (soft, no hard cap).
+#
+# PrimeKG is scale-free: promiscuous hubs (NR3C1, CYP3A4, ALB, TP53, major
+# diseases) have degrees orders of magnitude above specific targets
+# (SERPINA6, RBP4). Descending-degree neighbor truncation deterministically
+# floods candidate slices with hubs; a HARD degree cap would blind the
+# system to canonical receptors and comorbidities (deg > 500 is normal for
+# them), so the deployed rule is a soft inverse-log-degree weighting:
+# hubs stay reachable but specific neighbors win the truncation slice.
+# ---------------------------------------------------------------------------
+
+# "desc"     - legacy descending-degree truncation (ablation baseline)
+# "soft"     - soft inverse-log-degree weighting, NO hard drop (default)
+# "asc_cap"  - ascending degree with hard deg<=cap drop (ablation-only;
+#              expected to lose canonical high-degree targets)
+HUB_EXPANSION_RULE = "soft"
+HUB_DEGREE_CAP = 500
+HUB_SOFT_WEIGHT_EPS = 1.0
+
+
+def expansion_rule() -> str:
+    """Active neighborhood-expansion rule (env HCAD_EXPANSION_RULE)."""
+    rule = os.environ.get("HCAD_EXPANSION_RULE", HUB_EXPANSION_RULE)
+    if rule not in ("desc", "soft", "asc_cap"):
+        raise ValueError(f"Unknown HCAD_EXPANSION_RULE: {rule!r}")
+    return rule
+
+
+def hub_degree_cap() -> int:
+    return int(os.environ.get("HCAD_HUB_DEGREE_CAP", HUB_DEGREE_CAP))
+
+
+def hub_weight(degree: int) -> float:
+    """Soft inverse-log-degree specificity weight, in (0, 1].
+
+    1 / (1 + ln(1 + deg)) - monotonically decreasing in degree, never zero:
+    a 10^5-degree hub keeps ~12% weight (reachable), while a degree-3
+    specific target keeps ~50%.
+    """
+    import math
+
+    return 1.0 / (1.0 + math.log1p(max(0, int(degree))) * HUB_SOFT_WEIGHT_EPS)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b: latency precompute with a config-versioned decoupler cache.
+# ---------------------------------------------------------------------------
+
+DECOUPLER_CACHE_ENABLED = True
+DECOUPLER_EMBED_CACHE_MAXSIZE = 20_000  # ~61 MB at d=768 float32
+
+
+def decoupler_cache_enabled() -> bool:
+    default = "1" if DECOUPLER_CACHE_ENABLED else "0"
+    return os.environ.get("HCAD_DECOUPLER_CACHE", default) == "1"
 
 # LLM
 LLM_OLLAMA_TIMEOUT_S = 120.0

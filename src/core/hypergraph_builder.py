@@ -183,7 +183,17 @@ class HypergraphBuilder:
         """
         Compute importance score for a hyperedge.
 
-        Importance(EH_i) = Σ λ_j × NodeScore_j
+        Legacy ("desc"): Importance(EH) = sum_v ln(1 + deg(v)) - strictly
+        monotonically increasing in cardinality and promiscuity, so
+        scale-free hubs (NR3C1, CYP3A4) dominate every slice.
+
+        Phase 4 ("soft"): soft inverse-entity-frequency importance
+
+            Importance_IEF(EH) = (1/|EH|) * sum_v 1 / (1 + ln(1 + deg(v)))
+
+        Specific low-degree hyperedges outrank hub-stuffed ones, but hubs
+        keep positive weight - canonical receptors and major diseases stay
+        reachable (no hard degree cap).
 
         Args:
             hyperedge: Dict with 'nodes' and 'types' keys.
@@ -196,23 +206,66 @@ class HypergraphBuilder:
         if not nodes:
             return 0.0
 
+        from src.config import expansion_rule
+
+        rule = expansion_rule()
         scores = []
         for node in nodes:
             if node in self.graph:
                 degree = self.graph.degree(node)
-                node_score = np.log1p(degree)  # log-scaled degree
+                if rule == "desc":
+                    node_score = np.log1p(degree)  # legacy log-degree
+                else:
+                    # soft (and the ablation-only asc_cap variant): inverse
+                    # log-degree specificity weight
+                    node_score = 1.0 / (1.0 + np.log1p(degree))
             else:
                 node_score = 0.0
             scores.append(node_score)
 
+        if rule == "desc":
+            total = float(np.sum(scores))
+        else:
+            # mean, not sum: decouples importance from hyperedge cardinality
+            total = float(np.mean(scores)) if scores else 0.0
+
         if weights is not None and len(weights) > 0:
             # Use scalar weight mean as a scaling factor
             scale = float(np.mean(weights))
-            return float(np.sum(scores) * scale)
+            return total * scale
 
-        return float(np.sum(scores))
+        return total
 
     # Neighborhood Expansion
+
+    def _ordered_neighbors(self, neighbors: set) -> list:
+        """Deterministic neighbor order under the active expansion rule.
+
+        desc:     descending degree (legacy - hub-favoring truncation)
+        soft:     descending soft inverse-log-degree weight (hub-damped,
+                  no hard drop - the Phase-4 default)
+        asc_cap:  ascending degree with a hard deg <= cap drop
+                  (ablation-only; expected to lose canonical hubs)
+        """
+        from src.config import expansion_rule, hub_degree_cap
+
+        rule = expansion_rule()
+        if rule == "desc":
+            return sorted(neighbors, key=lambda n: (-self.graph.degree(n), str(n)))
+        if rule == "asc_cap":
+            cap = hub_degree_cap()
+            return sorted(
+                (n for n in neighbors if self.graph.degree(n) <= cap),
+                key=lambda n: (self.graph.degree(n), str(n)),
+            )
+        # soft: high specificity weight first; hubs stay in the list
+        return sorted(
+            neighbors,
+            key=lambda n: (
+                -(1.0 / (1.0 + np.log1p(self.graph.degree(n)))),
+                str(n),
+            ),
+        )
 
     def expand_neighborhood(self, node_name: str, hops: int = 2) -> set:
         """
@@ -241,11 +294,10 @@ class HypergraphBuilder:
                 neighbors = set(self.graph.successors(node)) | set(
                     self.graph.predecessors(node)
                 )
-                # deterministic cap - sort by degree then
-                # name before slicing (set order is hash-seed dependent).
+                # deterministic cap under the active expansion rule before
+                # slicing (set order is hash-seed dependent).
                 neighbors = set(
-                    sorted(neighbors, key=lambda n: (-self.graph.degree(n), str(n)))
-                    [:MAX_NEIGHBORS_PER_HOP]
+                    self._ordered_neighbors(neighbors)[:MAX_NEIGHBORS_PER_HOP]
                 )
                 new_frontier |= neighbors - visited
 

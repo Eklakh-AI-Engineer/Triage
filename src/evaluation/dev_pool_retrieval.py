@@ -73,6 +73,118 @@ def _env_overrides(overrides: Dict[str, Optional[str]]) -> Iterator[None]:
                 os.environ[key] = old
 
 
+def _hub_anchor_fraction(hcad_rag, contexts: list, degree_cap: int) -> bool:
+    """True when any retrieved context is anchored on a >cap-degree node.
+
+    Retention proxy for canonical therapeutic targets (NR3C1, PTGS2, major
+    diseases): a deployment that loses these hubs is clinically blind even
+    if retrieval metrics look fine on low-degree gold triples.
+    """
+    graph_wrapper = hcad_rag.graph
+    graph_nx = getattr(graph_wrapper, "graph", graph_wrapper)
+    name_to_node = getattr(graph_wrapper, "name_to_node", {}) or {}
+    if graph_nx is None or not hasattr(graph_nx, "degree"):
+        return False
+    for ctx in contexts:
+        meta = ctx.get("metadata") or {}
+        for key in ("head_name", "tail_name"):
+            name = meta.get(key)
+            if not name:
+                continue
+            node_id = name_to_node.get(name, name)
+            try:
+                if node_id in graph_nx and graph_nx.degree(node_id) > degree_cap:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def run_hub_ablation(
+    num_samples: int = 60,
+    pool: str = "dev",
+    output_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Phase 4a: neighbor-expansion-rule ablation on the development pool.
+
+    Compares the three expansion rules with all downstream decoupled
+    scoring held fixed (masking/vocab at current defaults, tau_sat unset):
+
+      desc    - legacy descending-degree truncation (hub-favoring)
+      soft    - soft inverse-log-degree weighting, NO hard drop (deployed)
+      asc_cap - ascending degree with a hard deg<=cap drop (ablation-only)
+
+    Reports paired mean Recall@5/NDCG@5 plus the canonical-hub retention
+    rate (fraction of questions retrieving at least one >cap-degree
+    anchor) - the hard-cap arm is expected to lose canonical receptors
+    and major comorbidities.
+    """
+    from src.config import hub_degree_cap
+
+    logger.info(
+        "Phase-4a hub ablation (n=%d, pool=%s, cap=%d)",
+        num_samples, pool, hub_degree_cap(),
+    )
+    samples = generate_paper_protocol_questions(num_samples, pool=pool)
+    if not samples:
+        raise RuntimeError(f"No {pool}-pool questions available for the hub ablation.")
+
+    from src.core.hcad_retriever import HCADRetriever
+
+    hcad_rag = HCADRetriever(fail_on_vector_error=True)
+    hcad_rag._ensure_components()
+
+    results: Dict[str, Any] = {
+        "pool": pool,
+        "num_samples": len(samples),
+        "k": RETRIEVAL_K,
+        "degree_cap": hub_degree_cap(),
+    }
+    cap = hub_degree_cap()
+
+    for rule in ("desc", "soft", "asc_cap"):
+        logger.info("Evaluating expansion rule: %s", rule)
+        ndcgs, recalls, hub_flags = [], [], []
+        with _env_overrides({"HCAD_EXPANSION_RULE": rule, "HCAD_TAU_SAT": None}):
+            for sample in samples:
+                contexts = hcad_rag.retrieve(sample["question"])
+                relevance = _ranked_relevance(sample.get("reference", ""), contexts)
+                ndcgs.append(ndcg_at_k(relevance, k=RETRIEVAL_K))
+                recalls.append(recall_at_k(relevance, k=RETRIEVAL_K))
+                hub_flags.append(_hub_anchor_fraction(hcad_rag, contexts, cap))
+
+        n = len(samples)
+        results[rule] = {
+            "mean_ndcg_at_k": round(float(np.mean(ndcgs)), 4) if n else 0.0,
+            "mean_recall_at_k": round(float(np.mean(recalls)), 4) if n else 0.0,
+            "canonical_hub_retention_rate": round(float(np.mean(hub_flags)), 4) if n else 0.0,
+        }
+        logger.info(
+            "  %-8s Recall@5=%.4f NDCG@5=%.4f hub-retention=%.4f",
+            rule, results[rule]["mean_recall_at_k"],
+            results[rule]["mean_ndcg_at_k"],
+            results[rule]["canonical_hub_retention_rate"],
+        )
+
+    results["deployed_rule"] = "soft"
+    results["note"] = (
+        "desc is the legacy hub-favoring baseline; asc_cap keeps only "
+        "deg<=cap nodes and is expected to lose canonical high-degree "
+        "targets (NR3C1, major diseases). soft is the deployed rule: "
+        "specific neighbors win the truncation slice, hubs stay reachable."
+    )
+
+    if output_path is None:
+        output_path = RESULTS_DIR / f"hub_ablation_{pool}_n{len(samples)}.json"
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+    logger.info("Hub ablation results saved to %s", output_path)
+
+    return results
+
+
 def _evaluate_config(
     hcad_rag, samples: list[dict], env: Dict[str, Optional[str]]
 ) -> Dict[str, Any]:

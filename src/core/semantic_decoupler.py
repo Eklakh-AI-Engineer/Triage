@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -80,8 +81,27 @@ class SemanticDecoupler:
         self._ner = None
         self._rex = None
 
+        # Phase 4b: config-versioned component/embedding cache (None while
+        # unchecked; may stay None when HCAD_DECOUPLER_CACHE=0).
+        self._cache = None
+        self._cache_resolved = False
+
         if not lazy:
             self._load_model()
+
+    def _get_cache(self):
+        """Resolve the shared decoupler cache once (or None if disabled)."""
+        if not self._cache_resolved:
+            self._cache_resolved = True
+            from src.core.decoupler_cache import get_decoupler_cache
+
+            self._cache = get_decoupler_cache(
+                extra_version_components=[
+                    "rel_kw=" + json.dumps(sorted(_RELATION_KEYWORDS)),
+                    "mod_kw=" + json.dumps(sorted(_MODIFIER_KEYWORDS)),
+                ]
+            )
+        return self._cache
 
     # Model loading
     def _load_model(self) -> None:
@@ -439,9 +459,24 @@ class SemanticDecoupler:
         relation_texts: list[str] = []
         modifier_texts: list[str] = []
 
+        # Phase 4b: the full extraction path (no entities, no relations
+        # supplied) is the expensive one - SciSpacy NER plus rule scans per
+        # document. Its outputs are pure functions of the text and the
+        # config version, so they are cached across queries and sessions.
+        cache = self._get_cache()
+
         for i, text in enumerate(texts):
             ents = entities_list[i] if i < len(entities_list) else None
             rels = relations_list[i] if i < len(relations_list) else None
+            was_unsupervised = ents is None and rels is None
+
+            if was_unsupervised and cache is not None:
+                cached = cache.get_components(text)
+                if cached is not None:
+                    entity_texts.append(cached[0])
+                    relation_texts.append(cached[1])
+                    modifier_texts.append(cached[2])
+                    continue
 
             # If not provided, run NER / relation extraction
             if ents is None:
@@ -449,37 +484,77 @@ class SemanticDecoupler:
             if rels is None:
                 rels = self._get_rex().extract(text, ents)
 
-            entity_texts.append(self._extract_entity_text(text, ents))
-            relation_texts.append(self._extract_relation_text(text, rels))
-            modifier_texts.append(self._extract_modifier_text(text, ents, rels))
+            e_text = self._extract_entity_text(text, ents)
+            r_text = self._extract_relation_text(text, rels)
+            m_text = self._extract_modifier_text(text, ents, rels)
+            entity_texts.append(e_text)
+            relation_texts.append(r_text)
+            modifier_texts.append(m_text)
+            if cache is not None and was_unsupervised:
+                # only cache the unsupervised path: explicit entities or
+                # relations are caller-specific and cheap to recompute
+                cache.put_components(text, e_text, r_text, m_text)
 
-        # Vectorized batch encoding of all 3*N strings together
+        # Vectorized batch encoding of all 3*N strings together, with the
+        # config-versioned embedding LRU short-circuiting repeat strings
+        # (relation phrases, neutral anchors, recurring entity pairs).
         all_texts = entity_texts + relation_texts + modifier_texts
         self._load_model()
 
-        with torch.no_grad():
-            try:
-                all_vecs_np = self._model.encode(
-                    all_texts,
-                    batch_size=32,
-                    show_progress_bar=False,
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                )
-            except Exception as e:
-                logger.warning("CUDA OOM during batch encode (%s). Falling back embedding model to CPU.", e)
-                self._model = self._model.to("cpu")
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                all_vecs_np = self._model.encode(
-                    all_texts,
-                    batch_size=32,
-                    show_progress_bar=False,
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                )
-            all_vecs = torch.from_numpy(all_vecs_np.astype(np.float32))
+        all_vecs: list[np.ndarray | None] = [None] * len(all_texts)
+        pending: dict[str, list[int]] = {}
+        if cache is not None:
+            for idx, t in enumerate(all_texts):
+                vec = cache.get_embedding(t, dim=self._dim)
+                if vec is not None:
+                    all_vecs[idx] = vec
+                else:
+                    pending.setdefault(t, []).append(idx)
+            texts_to_encode = list(pending)
+        else:
+            texts_to_encode = list(all_texts)
 
+        if texts_to_encode:
+            with torch.no_grad():
+                try:
+                    encoded_np = self._model.encode(
+                        texts_to_encode,
+                        batch_size=32,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                        normalize_embeddings=True,
+                    )
+                except Exception as e:
+                    logger.warning("CUDA OOM during batch encode (%s). Falling back embedding model to CPU.", e)
+                    self._model = self._model.to("cpu")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    encoded_np = self._model.encode(
+                        texts_to_encode,
+                        batch_size=32,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                        normalize_embeddings=True,
+                    )
+                # some encoders return a flat (d,) vector for a single item
+                encoded_np = np.atleast_2d(np.asarray(encoded_np))
+
+            for j, t in enumerate(texts_to_encode):
+                vec = np.asarray(encoded_np[j], dtype=np.float32)
+                if cache is not None:
+                    cache.put_embedding(t, vec)
+                    for idx in pending[t]:
+                        all_vecs[idx] = vec
+                else:
+                    all_vecs[j] = vec
+
+        if any(v is None for v in all_vecs):
+            raise RuntimeError("Decoupler cache returned incomplete embeddings")
+
+        all_vecs_np = np.stack([np.asarray(v, dtype=np.float32) for v in all_vecs])
+        all_vecs = torch.from_numpy(all_vecs_np)
+
+        with torch.no_grad():
             E = all_vecs[:n]
             R = all_vecs[n:2*n]
             M = all_vecs[2*n:]

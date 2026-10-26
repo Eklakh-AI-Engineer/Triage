@@ -274,6 +274,19 @@ Examples:
     p_re.add_argument("--samples", type=int, default=60,
                       help="Number of pool questions (default 60)")
     p_re.set_defaults(func=cmd_retrieval_eval)
+
+    # hub-eval (Phase 4a ablation)
+    p_hub = subparsers.add_parser(
+        "hub-eval",
+        help="Phase 4a: neighbor-expansion-rule ablation (desc/soft/asc_cap) on the dev pool",
+    )
+    p_hub.add_argument(
+        "--question-pool", choices=["dev", "test"], default="dev",
+        help="Question pool (default dev)",
+    )
+    p_hub.add_argument("--samples", type=int, default=60,
+                       help="Number of pool questions (default 60)")
+    p_hub.set_defaults(func=cmd_hub_eval)
     p_save.set_defaults(func=cmd_save_pipeline)
 
     # serve (workbench API)
@@ -355,6 +368,14 @@ def cmd_retrieval_eval(args):
             "  delta vs baseline: dRecall@5=%+.4f  dNDCG@5=%+.4f",
             d["recall_at_k"], d["ndcg_at_k"],
         )
+
+def cmd_hub_eval(args):
+    """Phase 4a: neighbor-expansion-rule ablation on the dev pool."""
+    from src.evaluation.dev_pool_retrieval import run_hub_ablation
+
+    results = run_hub_ablation(
+        num_samples=args.samples, pool=args.question_pool
+    )
 
 def cmd_save_pipeline(args):
     """Serialize the entire HCAD-RAG pipeline into a joblib model artifact."""

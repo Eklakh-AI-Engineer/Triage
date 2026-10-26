@@ -44,6 +44,10 @@ def decoupler():
     d = SemanticDecoupler(lazy=True)
     d._model = _FakeModel()
     d._dim = 64  # fake encoder dimension
+    # isolate from the shared config-versioned cache: fake-model vectors
+    # must never leak into the process-wide cache namespace
+    d._cache_resolved = True
+    d._cache = None
     return d
 
 
