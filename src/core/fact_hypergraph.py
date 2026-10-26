@@ -7,8 +7,17 @@ entity/fact incidence graph (hypergraph PageRank on H H^T).
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+
+# PrimeKG relations whose semantics carry no direction: both endpoints are
+# co-equal association members (disease_disease is symmetric).
+UNDIRECTED_RELATIONS = {"disease_disease"}
+
+# Relations whose PrimeKG name already encodes absence; rendering them with
+# an extra negation cue would produce double negation.
+NEGATED_RELATIONS = {"disease_phenotype_negative"}
 
 @dataclass(frozen=True)
 class ClinicalFact:
@@ -18,6 +27,17 @@ class ClinicalFact:
     qualifiers: dict = field(default_factory=dict)
     confidence: float = 1.0
     source_id: str = ""
+    direction: str = "directed"     # "directed" | "undirected"
+
+    @property
+    def head_names(self) -> list:
+        """Role values excluding the anchor (tail) - the head side of the fact."""
+        return [v for k, v in self.roles.items() if k != "anchor"]
+
+    @property
+    def tail_name(self):
+        """The anchor role - the tail side of a directed fact."""
+        return self.roles.get("anchor")
 
 class FactIndex:
     def __init__(self) -> None:
@@ -66,10 +86,47 @@ class FactIndex:
         return out
 
     def render(self, fact: ClinicalFact) -> str:
-        """Faithful evidence rendering - never a false pairwise collapse."""
-        parties = ", ".join(sorted(set(fact.roles.values())))
-        pol = "" if fact.polarity == "asserts" else f" [polarity: {fact.polarity}]"
-        return f"{parties} are jointly linked by [{fact.predicate}]{pol}."
+        """Faithful, role-directed evidence rendering.
+
+        Directed facts render as ``heads --[predicate]--> tail`` (asymmetric);
+        undirected facts (disease_disease) as ``heads --[predicate]-- tail``.
+        Negated relations (e.g. disease_phenotype_negative) render with exactly
+        ONE negation token - their PrimeKG name already encodes absence, so a
+        second cue would produce double negation ("does not lack").
+        """
+        heads = ", ".join(fact.head_names)
+        tail = fact.tail_name or "UNKNOWN"
+
+        if fact.polarity == "negated":
+            rendered = f"{heads} are NOT associated with {tail} (negated relation: {fact.predicate})."
+        elif fact.direction == "undirected":
+            rendered = f"{heads} --[{fact.predicate}]-- {tail} (undirected)."
+        elif fact.polarity == "uncertain":
+            rendered = f"{heads} --[{fact.predicate}]--> {tail} (uncertain)."
+        else:
+            rendered = f"{heads} --[{fact.predicate}]--> {tail}."
+
+        self._single_negation_guard(rendered, fact)
+        return rendered
+
+    @staticmethod
+    def _single_negation_guard(rendered: str, fact: ClinicalFact) -> None:
+        """A negated fact must not compose with a second negation token.
+
+        Catches composition double negation ("does not lack", "not without",
+        "no absence of") while ignoring entity names that legitimately contain
+        words like "absence of". Raises ValueError on violation.
+        """
+        low = rendered.lower()
+        doubled = re.search(
+            r"\b(not|no|never)\s+(not|no|never|lack of|absence of|without)\b",
+            low,
+        )
+        if doubled:
+            raise ValueError(
+                f"Double-negation guard violated: negated relation rendered as "
+                f"{doubled.group()!r} in {rendered!r}"
+            )
 
 def build_fact_index_from_kg(kg, max_arity: int = 6, min_members: int = 2,
                              max_facts_per_tail: int = 50,
@@ -111,9 +168,10 @@ def build_fact_index_from_kg(kg, max_arity: int = 6, min_members: int = 2,
         idx.add(ClinicalFact(
             predicate=rel,
             roles=roles,
-            polarity="asserts",
+            polarity="negated" if rel in NEGATED_RELATIONS else "asserts",
             confidence=0.9,
             source_id="primekg",
+            direction="undirected" if rel in UNDIRECTED_RELATIONS else "directed",
         ))
         if len(idx.facts) >= max_facts_per_tail * 200:  # global safety cap
             break

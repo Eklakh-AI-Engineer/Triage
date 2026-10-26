@@ -148,6 +148,16 @@ class RelationExtractor:
         for cue in sorted(NEGATION_CUES, key=len, reverse=True)
     ]
 
+    # Clause boundaries terminate a negation cue's scope: a cue may not cross
+    # a sentence/clause separator or a contrastive conjunction to negate a
+    # relation stated in a different clause.
+    _CLAUSE_BOUNDARY_RE = re.compile(
+        r"[.;,:]"
+        r"|\b(?:however|but|although|though|whereas|while|yet|nevertheless|"
+        r"nonetheless|conversely|in contrast|on the contrary)\b",
+        re.IGNORECASE,
+    )
+
     @classmethod
     def detect_negation(cls, text: str) -> tuple[bool, str]:
         """Identify negation cues in *text* with word boundaries.
@@ -161,6 +171,46 @@ class RelationExtractor:
             m = pat.search(text or "")
             if m:
                 return True, m.group().lower()
+        return False, ""
+
+    @classmethod
+    def _same_clause(cls, segment: str) -> bool:
+        """True when no clause boundary separates *segment*'s endpoints."""
+        return cls._CLAUSE_BOUNDARY_RE.search(segment) is None
+
+    @classmethod
+    def detect_negation_in_clause(
+        cls, text: str, head_start: int, head_end: int,
+        tail_start: int, lookback: int = 40,
+    ) -> tuple[bool, str]:
+        """Negation cue detection bounded by clause boundaries (P2c).
+
+        A cue negates the head->tail relation only if no clause boundary
+        (``[.;,:]`` or a contrastive conjunction) separates the cue from
+        the head or the tail entity. This stops cues from a previous
+        sentence ("X treats Y. However, aspirin should not be used with
+        Z.") from negating relations stated in a later clause.
+        """
+        window_start = max(0, head_start - lookback)
+        window = text[window_start:tail_start]
+        head_pos = head_start - window_start
+        head_end_pos = head_end - window_start
+
+        for pat in cls._CUE_PATTERNS:
+            for m in pat.finditer(window):
+                if m.start() <= head_pos:
+                    # cue before (or inside) the head entity
+                    segment = window[m.end():head_pos]
+                    if cls._same_clause(segment):
+                        return True, m.group().lower()
+                else:
+                    # cue after the head: must share a clause with the tail
+                    # span so cues in a discarded clause do not leak in.
+                    tail_pos = tail_start - window_start
+                    segment = window[m.end():tail_pos] if m.end() <= tail_pos \
+                        else window[tail_pos:m.start()]
+                    if cls._same_clause(segment):
+                        return True, m.group().lower()
         return False, ""
 
     # Modifier extraction
@@ -268,8 +318,17 @@ class RelationExtractor:
                             # Scope: a small window before the head entity
                             # plus the pair span, so cues such as
                             # "No evidence that X causes Y" are caught.
-                            scope = text[max(0, head_start - 40):tail_end]
-                            is_neg, neg_cue = self.detect_negation(scope)
+                            # P2c: the cue window terminates at clause
+                            # boundaries ([.;,:] and contrastive
+                            # conjunctions) - a cue from a previous
+                            # sentence/clause no longer negates the
+                            # relation stated here.
+                            is_neg, neg_cue = self.detect_negation_in_clause(
+                                text,
+                                head_start,
+                                head.get("end", head_start),
+                                tail_start,
+                            )
                             modifier = self.extract_modifier(
                                 text[head_start:tail_end], entities
                             )

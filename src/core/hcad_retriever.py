@@ -199,6 +199,19 @@ class HCADRetriever:
         return self._hypergraph
 
     @property
+    def gate_mode(self) -> str:
+        """Active JEV gate mode: 'live-typesafe' or 'local-calibrated'.
+
+        Exposed for benchmark provenance: the mode is recorded in every
+        run_manifest and fail-loud compared against HCAD_EXPECTED_GATE_MODE
+        so a stray TYPESAFE_API_KEY cannot silently switch the measurement
+        chain between runs.
+        """
+        if self._decision_gate is None:
+            return "uninitialized"
+        return getattr(self._decision_gate, "mode", "unknown")
+
+    @property
     def collection(self):
         if self._collection is None:
             from src.data.build_vector_store import load_vector_store

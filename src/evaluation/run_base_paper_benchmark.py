@@ -411,6 +411,31 @@ def _completed_questions_from_checkpoint(
                     completed.add(record["question"])
     return completed
 
+def _grounded_mode_counts(
+    checkpoint_path: Path, pool: str, question_set_id: str
+) -> Dict[str, int]:
+    """P2d provenance: grounded vs parametric HCAD answers for this sample set.
+
+    Read from the checkpoint so resumed runs aggregate the full set, not
+    just the questions evaluated in the current session.
+    """
+    counts = {"grounded": 0, "parametric": 0}
+    if checkpoint_path.exists():
+        with open(checkpoint_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (record.get("question_pool") == pool
+                        and record.get("question_set_id") == question_set_id):
+                    mode = record.get("grounded_mode")
+                    if mode in counts:
+                        counts[mode] += 1
+    return counts
+
 def _fetch_stratified_chunks(collection, num_docs: int, pool: str, rng) -> list[dict]:
     """Fetch candidate source chunks stratified by corpus segment.
 
@@ -623,6 +648,22 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     _ = hcad_rag.graph
     _ = hcad_rag.hypergraph
 
+    # Gate-mode guard: the Oct-25 run silently switched to the live TypeSafe
+    # gate because a key was present in the environment, making it
+    # incomparable with the local-calibrated anchor run. Fail loudly if the
+    # active mode differs from the explicitly declared expectation.
+    gate_mode = hcad_rag.gate_mode
+    expected_gate_mode = os.environ.get("HCAD_EXPECTED_GATE_MODE", "").strip() or None
+    logger.info("JEV gate mode: %s (expected: %s)", gate_mode, expected_gate_mode or "any")
+    if expected_gate_mode and gate_mode != expected_gate_mode:
+        raise RuntimeError(
+            f"Gate mode mismatch: expected HCAD_EXPECTED_GATE_MODE="
+            f"{expected_gate_mode!r}, got {gate_mode!r}. Refusing to run: "
+            f"benchmark results are only comparable within one gate mode. "
+            f"Unset the key, remove it from the environment, or update "
+            f"HCAD_EXPECTED_GATE_MODE if this configuration change is intended."
+        )
+
     # Paper protocol first (Sec. 3.5): LLM-generated questions with source
     # chunks as references. Generation failure is FATAL: falling back to the
     # handful of curated questions silently produces a non-protocol
@@ -787,6 +828,11 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                 "source_chunk_id": sample.get("source_chunk_id", ""),
                 "question_pool": sample.get("pool", question_pool),
                 "question_set_id": question_set_id,
+                # P2d provenance: grounded vs parametric (abstained) HCAD
+                # answers, so the report can quantify abstentions without
+                # reconstructing them from logs.
+                "grounded_mode": "grounded" if hcad_contexts else "parametric",
+                "n_hcad_contexts": len(hcad_contexts),
                 "scores": {
                     "Baseline LLM": score_base.to_dict(),
                     "Vanilla RAG": score_van.to_dict(),
@@ -816,6 +862,9 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     records = _records_from_checkpoint(
         checkpoint_path, {s["question"] for s in samples}, question_pool=question_pool,
         question_set_id=question_set_id,
+    )
+    grounded_mode_counts = _grounded_mode_counts(
+        checkpoint_path, question_pool, question_set_id
     )
 
     # Compute aggregate statistics
@@ -962,6 +1011,11 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             "random_seed": RANDOM_SEED,
             "question_pool": question_pool,
             "question_set_id": question_set_id,
+            # Gate-mode provenance: comparable only within one mode.
+            "gate_mode": gate_mode,
+            # Learned vs static query-adaptive tensor (ablation runs set
+            # HCAD_TENSOR_MODE=learned).
+            "tensor_mode": os.environ.get("HCAD_TENSOR_MODE", "static"),
         },
         "scoring_based_assessment": final_scores,
         "scoring_by_difficulty_tier": {
@@ -975,6 +1029,7 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         "retrieval_latency_seconds": avg_latencies,
         "retrieval_quality": retrieval_quality,
         "citation_precision": citation_summary,
+        "grounded_mode": grounded_mode_counts,
         "significance_testing": significance_testing,
         "num_samples": len(samples),
         "sample_source_counts": {

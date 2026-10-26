@@ -256,9 +256,16 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
                for c in hcad_contexts]
         jev = round(sum(phi) / len(phi), 4) if phi else 0.0
         spread = max(phi) - min(phi) if len(phi) > 1 else 0.0
-        passed = len(hcad_contexts) >= 2
+        # P2d: a single admitted context is sufficient grounding for a PASS -
+        # the dual gate already enforces the relevance floor per context, so
+        # demanding >= 2 conflated "thin evidence" with "no evidence" and
+        # inflated the abstention rate.
+        passed = len(hcad_contexts) >= 1
         if not passed:
             provider.abstain_events += 1
+        # Provenance for downstream consumers: was the answer grounded in
+        # retrieved evidence or produced parametrically (abstained)?
+        grounded_mode = "grounded" if hcad_contexts else "parametric"
         context_words = sum(len(_context_document(c).split()) for c in hcad_contexts)
         gate = {
             "decision": "PASS" if passed else "ABSTAIN",
@@ -267,6 +274,7 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "tauEntropy": config.tauEntropy,
             "admittedCount": len(hcad_contexts),
             "contextWords": min(config.wordBudget, context_words),
+            "groundedMode": grounded_mode,
         }
 
         # Citations from admitted contexts.
@@ -302,6 +310,7 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "rawCandidates": raw_candidates,
             "decoupling": decoupling,
             "gate": gate,
+            "groundedMode": grounded_mode,
             "arena": arena,
             "citations": citations,
             "abstentionRate": _session_abstention_rate(),

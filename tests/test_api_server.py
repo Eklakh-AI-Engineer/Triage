@@ -122,6 +122,10 @@ def test_query_pass_with_citation_segments(client):
     assert body["abstentionRate"] == 0.0
     assert body["latencyMs"] >= 0.0
 
+    # P2d: grounded-mode provenance - evidence-backed answers are grounded.
+    assert body["groundedMode"] == "grounded"
+    assert body["gate"]["groundedMode"] == "grounded"
+
     # Entities mapped to workbench types.
     names = {e["name"]: e["type"] for e in body["entities"]}
     assert names["Metformin"] == "drug"
@@ -144,6 +148,26 @@ def test_query_pass_with_citation_segments(client):
     assert body["arena"]["warnings"] == []
 
 
+def test_query_single_context_passes(client):
+    """P2d: one admitted context is sufficient grounding for a PASS.
+
+    The dual gate already enforces the per-context relevance floor; the old
+    >= 2 rule conflated "thin evidence" with "no evidence" and inflated the
+    abstention rate.
+    """
+    server.provider._hcad = StubHCAD(
+        _contexts(1), "Metformin should be avoided in CKD [Evidence 1]."
+    )
+    res = client.post(
+        "/api/triage/query", json={"query": "Metformin in renal failure?", "config": {}}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["gate"]["decision"] == "PASS"
+    assert body["gate"]["admittedCount"] == 1
+    assert body["groundedMode"] == "grounded"
+
+
 def test_query_abstain(client):
     server.provider._hcad = StubHCAD([], "Parametric fallback answer.")
     res = client.post(
@@ -155,6 +179,8 @@ def test_query_abstain(client):
     assert body["gate"]["admittedCount"] == 0
     assert body["gate"]["contextWords"] == 0
     assert body["abstentionRate"] == 100.0
+    assert body["groundedMode"] == "parametric"
+    assert body["gate"]["groundedMode"] == "parametric"
     assert body["arena"]["warnings"]
     assert body["arena"]["triage"][0]["kind"] == "text"
     assert "Evidence" not in body["citations"]

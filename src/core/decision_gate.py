@@ -49,6 +49,16 @@ class DecisionGate:
         elif not jev_key:
             logger.info("No TYPESAFE_API_KEY detected. JEV DecisionGate running in local calibrated mode.")
 
+    @property
+    def mode(self) -> str:
+        """Active gate mode: 'live-typesafe' or 'local-calibrated'.
+
+        Recorded in the benchmark run_manifest so silent mode drift between
+        runs (e.g. a TYPESAFE_API_KEY appearing in the environment) is
+        detectable in every results file.
+        """
+        return "live-typesafe" if self.client is not None else "local-calibrated"
+
     def verify_and_prune_candidates(
         self,
         candidates: List[Dict[str, Any]],
