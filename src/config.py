@@ -57,8 +57,88 @@ GS_RESIDUAL_TOL = 1e-3      # below this, a component is marked absent (presence
 NEUTRAL_RELATION_TEXT = "biomedical relation"   # anchor, never equal to entity text
 NEUTRAL_MODIFIER_TEXT = "no qualifier stated"
 
-# Knowledge-graph relation exclusion policy 
+# Knowledge-graph relation exclusion policy
 KG_EXCLUDED_RELATIONS = {"drug_drug"}
+
+# ---------------------------------------------------------------------------
+# Deliverable-B (Phase 3): query-conditioned channel masking, relation
+# vocabulary mapping, and Gate-2 saturation cap.
+# ---------------------------------------------------------------------------
+
+# Calibrated prior similarity assigned to a candidate that is missing a
+# channel the query actively uses (p_k^Q = 1, p_k^C = 0). Replaces both the
+# old silent 1.0 (neutral-anchor cosine) and the proposed drop-from-
+# denominator bug; range [0.15, 0.25] per the epistemic audit.
+CHANNEL_MISSING_PRIOR = 0.20
+
+# Query-conditioned presence masking: omega_k = w_k * p_k^Q / sum_j w_j * p_j^Q.
+# Toggles default ON (the recommended experiment); HCAD_PRESENCE_MASKING=0
+# disables for paired before/after measurement.
+CHANNEL_PRESENCE_MASKING = True
+
+# PrimeKG schema labels -> canonical clinical verb phrases. Raw schema
+# strings ("drug protein") barely cosine-match natural query verbs
+# ("targets") in S-PubMedBert; the mapped phrases close that gap. drug_drug
+# stays excluded (KG_EXCLUDED_RELATIONS) to preserve the benchmark protocol
+# and the memory footprint.
+RELATION_VOCAB_MAPPING = True
+RELATION_VOCAB_MAP = {
+    "contraindication": "is contraindicated in and must not be used for",
+    "indication": "is indicated for the treatment of",
+    "off-label use": "is used off-label for",
+    "drug_effect": "causes effect or adverse effect",
+    "disease_disease": "is associated with",
+    "drug_protein": "targets or binds protein",
+    "disease_protein": "is associated with altered protein",
+    "disease_phenotype_positive": "presents with phenotype",
+    "disease_phenotype_negative": "excludes phenotype and is not characterized by",
+    "biomarker": "is a biomarker for",
+    "phenotype_protein": "phenotype associated with protein",
+    "protein_protein": "interacts with protein",
+}
+
+# Gate-2 saturation ceiling: tau_eff = min(tau_sat, max(Phi_min, mu + k*sigma)).
+# None disables the cap until it is calibrated on the development pool as the
+# 25th percentile of gold development candidate scores; set via
+# HCAD_TAU_SAT (e.g. "0.42") once calibrated.
+TAU_SAT = None
+TAU_SAT_PERCENTILE = 25.0
+
+
+def presence_masking_enabled() -> bool:
+    """Runtime toggle for query-conditioned channel masking."""
+    default = "1" if CHANNEL_PRESENCE_MASKING else "0"
+    return os.environ.get("HCAD_PRESENCE_MASKING", default) == "1"
+
+
+def relation_vocab_enabled() -> bool:
+    """Runtime toggle for PrimeKG relation-vocabulary mapping."""
+    default = "1" if RELATION_VOCAB_MAPPING else "0"
+    return os.environ.get("HCAD_RELATION_VOCAB", default) == "1"
+
+
+def map_relation_text(raw_relation: str) -> str:
+    """Map a raw PrimeKG relation label to a canonical verb phrase.
+
+    Unknown relations keep the legacy underscores-to-spaces rendering.
+    """
+    if not raw_relation:
+        return ""
+    key = raw_relation.strip().lower()
+    if relation_vocab_enabled() and key in RELATION_VOCAB_MAP:
+        return RELATION_VOCAB_MAP[key]
+    return key.replace("_", " ")
+
+
+def tau_sat() -> float | None:
+    """Calibrated Gate-2 saturation ceiling, if set."""
+    raw = os.environ.get("HCAD_TAU_SAT")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+    return TAU_SAT
 
 # LLM
 LLM_OLLAMA_TIMEOUT_S = 120.0

@@ -5,7 +5,7 @@ from typing import Optional
 
 import numpy as np
 
-from src.config import FILTERING_K, MAX_EVIDENCE_ITEMS, MIN_PHI_SCORE
+from src.config import FILTERING_K, MAX_EVIDENCE_ITEMS, MIN_PHI_SCORE, tau_sat as _tau_sat
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +16,25 @@ class StatisticalFilter:
         self.k = k
 
     def compute_threshold(
-        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None
+        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None,
+        tau_sat: Optional[float] = None,
     ) -> tuple[float, float, float]:
         """Compute adaptive threshold from similarity score distribution.
 
         Audit fix (item 9): pure NumPy - the previous version round-tripped
         tiny score arrays through CUDA on every call.
+
+        Deliverable-B saturation cap: when a calibrated ceiling tau_sat is
+        available (25th percentile of gold development candidate scores),
+
+            tau_eff = min(tau_sat, max(Phi_min, mu + k * sigma))
+
+        so a homogeneous candidate pool cannot push the adaptive threshold
+        past the calibrated ceiling and starve the prompt of evidence.
         """
         k = k if k is not None else self.k
+        if tau_sat is None:
+            tau_sat = _tau_sat()
         arr = np.asarray(scores, dtype=np.float64).ravel()
         if arr.size == 0:
             return 0.0, 0.0, 0.0
@@ -31,13 +42,17 @@ class StatisticalFilter:
             raise ValueError("Non-finite scores supplied to the statistical filter")
         mu = float(arr.mean())
         sigma = float(arr.std())
-        return mu + k * sigma, mu, sigma
+        threshold = mu + k * sigma
+        if tau_sat is not None:
+            threshold = min(float(tau_sat), max(MIN_PHI_SCORE, threshold))
+        return threshold, mu, sigma
 
     def heaviside_filter(
-        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None
+        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None,
+        tau_sat: Optional[float] = None,
     ) -> np.ndarray:
         """Apply Heaviside step function: 1 if score >= threshold else 0."""
-        threshold, _, _ = self.compute_threshold(scores, k=k)
+        threshold, _, _ = self.compute_threshold(scores, k=k, tau_sat=tau_sat)
         arr = np.asarray(scores, dtype=np.float64)
         return (arr >= threshold).astype(int)
 

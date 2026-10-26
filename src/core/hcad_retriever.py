@@ -4,6 +4,7 @@ from typing import Optional
 import numpy as np
 
 from src.config import (
+    CHANNEL_MISSING_PRIOR,
     ENABLE_FEW_SHOT,
     FILTERING_K,
     LLM_MAX_TOKENS,
@@ -12,6 +13,11 @@ from src.config import (
     EMBEDDING_MODEL_NAME,
     MAX_EVIDENCE_ITEMS,
     MIN_PHI_SCORE,
+    SCORE_WEIGHT_ENTITY,
+    SCORE_WEIGHT_MODIFIER,
+    SCORE_WEIGHT_RELATION,
+    map_relation_text,
+    presence_masking_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -480,8 +486,8 @@ class HCADRetriever:
         entities = self._ner.extract_entities(query)
         relations = self._relation_extractor.extract_rules(query, entities)
 
-        Q = self._decoupler.decouple(
-            query, entities=entities, relations=relations
+        Q, query_presence = self._decoupler.decouple(
+            query, entities=entities, relations=relations, return_presence=True
         )
 
         all_entity_names = [
@@ -544,7 +550,10 @@ class HCADRetriever:
             ctx_doc = ctx.get("document", "")
             ctx_meta = ctx.get("metadata") or {}
             ctx_entity = ctx_meta.get("head_name", "")
-            ctx_relation = (ctx_meta.get("relation") or "").replace("_", " ").lower()
+            # Deliverable-B relation-vocabulary mapping: raw PrimeKG schema
+            # labels ("drug protein") barely cosine-match natural query verbs
+            # ("targets"); map to canonical clinical verb phrases.
+            ctx_relation = map_relation_text(ctx_meta.get("relation") or "")
             ctx_tail = ctx_meta.get("tail_name", "")
 
             candidate_docs.append(ctx_doc)
@@ -565,32 +574,52 @@ class HCADRetriever:
             entities_list.append(ctx_entities_dict)
             relations_list.append(ctx_relations_list)
 
-        C_batch = self._decoupler.decouple_batch(
+        C_batch, candidate_presence = self._decoupler.decouple_batch(
             candidate_docs,
             entities_list=entities_list,
             relations_list=relations_list,
             as_numpy=True,
+            return_presence=True,
         )
         if component_a is not None:
-            phi_scores = self._transformer.compute_batch_component_similarities(
+            channel_weights = (float(component_a[0]), float(component_a[1]),
+                               float(component_a[2]))
+        else:
+            channel_weights = (SCORE_WEIGHT_ENTITY, SCORE_WEIGHT_RELATION,
+                               SCORE_WEIGHT_MODIFIER)
+
+        if presence_masking_enabled():
+            # Deliverable-B: query-conditioned channel-presence masking.
+            phi_scores, masked_sims = self._transformer.compute_masked_similarities(
                 Q, C_batch, weights,
-                alpha=float(component_a[0]), beta=float(component_a[1]),
-                gamma=float(component_a[2]),
+                query_presence=query_presence,
+                candidate_presence=candidate_presence,
+                alpha=channel_weights[0], beta=channel_weights[1],
+                gamma=channel_weights[2],
+                missing_prior=CHANNEL_MISSING_PRIOR,
             )
-            # Per-channel similarities for this (query, candidate pool)
-            # pair: the listwise trainer learns the query-adaptive channel
-            # weights over exactly these columns. The PRE-GATE candidate
-            # pool is stashed too, index-aligned with the sims rows - the
-            # trainer's listwise loss runs over the full pool (gold may be
-            # present but gated out, and the loss must be able to teach the
-            # channel weights to rank it back in).
-            self._last_channel_sims = self._transformer.compute_channel_similarities(
-                Q, C_batch, weights)
-            self._last_candidate_pool = list(candidates)
+            self._last_masked_sims = masked_sims
         else:
             phi_scores = self._transformer.compute_batch_component_similarities(
-                Q, C_batch, weights
+                Q, C_batch, weights,
+                alpha=channel_weights[0], beta=channel_weights[1],
+                gamma=channel_weights[2],
             )
+        # Per-channel similarities for this (query, candidate pool)
+        # pair: the listwise trainer learns the query-adaptive channel
+        # weights over exactly these columns. The PRE-GATE candidate
+        # pool is stashed too, index-aligned with the sims rows - the
+        # trainer's listwise loss runs over the full pool (gold may be
+        # present but gated out, and the loss must be able to teach the
+        # channel weights to rank it back in).
+        self._last_channel_sims = self._transformer.compute_channel_similarities(
+            Q, C_batch, weights)
+        self._last_candidate_pool = list(candidates)
+        # Pre-gate provenance for the dev-pool harness (tau_sat calibration
+        # and paired before/after retrieval metrics).
+        self._last_phi_scores = np.asarray(phi_scores)
+        self._last_query_presence = query_presence
+        self._last_candidate_presence = candidate_presence
 
         filtered = self._filter.filter_contexts(
             candidates,

@@ -244,6 +244,11 @@ class SemanticDecoupler:
             if kw in residual.lower():
                 residual = re.sub(re.escape(kw), "", residual, flags=re.IGNORECASE)
         residual = re.sub(r"\s+", " ", residual).strip()
+        # punctuation-only residue (e.g. "." after entity stripping) is not
+        # modifier content: it would embed as noise and falsely mark the
+        # channel present (Deliverable-B presence honesty).
+        if not re.search(r"[a-z0-9]", residual, re.IGNORECASE):
+            return NEUTRAL_MODIFIER_TEXT
         # the residual frequently re-embeds the entity
         # text (span stripping fails on joined multi-entity strings), which
         # collides the modifier channel with the entity channel.
@@ -361,39 +366,27 @@ class SemanticDecoupler:
         entities: EntityDict | None = None,
         relations: list[dict[str, Any]] | None = None,
         as_numpy: bool = True,
-    ) -> torch.Tensor | np.ndarray:
-        """Decouple text into the HCAD matrix [E; R; M]."""
-        if entities is None:
-            entities = self._get_ner().extract_entities(text)
-        if relations is None:
-            relations = self._get_rex().extract(text, entities)
+        return_presence: bool = False,
+    ) -> torch.Tensor | np.ndarray | tuple:
+        """Decouple text into the HCAD matrix [E; R; M].
 
-        entity_text = self._extract_entity_text(text, entities)
-        relation_text = self._extract_relation_text(text, relations)
-        modifier_text = self._extract_modifier_text(text, entities, relations)
-
-        logger.debug(
-            "Decoupled components - E: '%s', R: '%s', M: '%s'",
-            entity_text[:80],
-            relation_text[:80],
-            modifier_text[:80],
+        Delegates to :meth:`decouple_batch` with a single item so the
+        single-text and batch paths execute byte-identical Gram-Schmidt
+        math (Deliverable-B query-batch MGS symmetry; previously the batch
+        path dropped the second R-orthogonalization pass for the modifier
+        channel, so decouple(t) != decouple_batch([t])[0]).
+        """
+        result = self.decouple_batch(
+            [text],
+            entities_list=[entities],
+            relations_list=[relations],
+            as_numpy=as_numpy,
+            return_presence=return_presence,
         )
-
-        E = self._encode(entity_text)
-        R = self._encode(relation_text)
-        M = self._encode(modifier_text)
-
-        E_orth, R_orth, M_orth = self._orthogonalize(E, R, M)
-
-        X_HCAD_tensor = torch.stack([E_orth, R_orth, M_orth])  # (3, d)
-
-        assert X_HCAD_tensor.shape == (NUM_SEMANTIC_COMPONENTS, self._dim), (
-            f"Expected shape {HCAD_MATRIX_SHAPE}, got {X_HCAD_tensor.shape}"
-        )
-
-        if as_numpy:
-            return X_HCAD_tensor.detach().cpu().numpy()
-        return X_HCAD_tensor
+        if return_presence:
+            batch, presence = result
+            return batch[0], presence[0]
+        return result[0]
 
     def decouple_batch(
         self,
@@ -401,7 +394,8 @@ class SemanticDecoupler:
         entities_list: list[EntityDict | None] | None = None,
         relations_list: list[list[dict[str, Any]] | None] | None = None,
         as_numpy: bool = True,
-    ) -> torch.Tensor | np.ndarray:
+        return_presence: bool = False,
+    ) -> torch.Tensor | np.ndarray | tuple:
         """Batch decouple multiple texts into shape (N, 3, d) using vectorized inference.
 
         Parameters
@@ -425,7 +419,10 @@ class SemanticDecoupler:
             # honor the tensor contract for empty batches.
             import torch as _torch
             empty = _torch.empty((0, NUM_SEMANTIC_COMPONENTS, self._dim), dtype=_torch.float32)
-            return empty.numpy() if as_numpy else empty
+            empty_result = empty.numpy() if as_numpy else empty
+            if return_presence:
+                return empty_result, np.zeros((0, 3), dtype=bool)
+            return empty_result
 
         # validate parallel inputs instead of silently
         # padding/truncating.
@@ -508,6 +505,10 @@ class SemanticDecoupler:
             M_proj = M_unit - torch.sum(M_unit * E_orth, dim=1, keepdim=True) * E_orth
             M_proj = M_proj - torch.sum(M_proj * R_orth, dim=1, keepdim=True) * R_orth
             M_proj = M_proj - torch.sum(M_proj * E_orth, dim=1, keepdim=True) * E_orth  # re-orth
+            # Deliverable-B MGS symmetry: the scalar path runs TWO full
+            # passes over [E, R] (E,R,E,R); the batch path previously stopped
+            # at E,R,E, so batch and scalar decoupling diverged numerically.
+            M_proj = M_proj - torch.sum(M_proj * R_orth, dim=1, keepdim=True) * R_orth
             M_res = torch.linalg.norm(M_proj, dim=1, keepdim=True)
             M_degenerate = M_res < GS_RESIDUAL_TOL
             M_blend = eta * (M_proj / (M_res + eps)) + (1.0 - eta) * M_unit
@@ -518,7 +519,27 @@ class SemanticDecoupler:
 
             batch_tensor = torch.stack([E_orth, R_orth, M_orth], dim=1)
 
+        # Channel presence flags (Deliverable-B): a channel is PRESENT only
+        # when it carried real, non-fallback content AND retained independent
+        # signal after orthogonalization. Neutral fallback strings and
+        # degenerate residuals both encode absence.
+        presence = np.ones((n, 3), dtype=bool)
+        if return_presence:
+            for i in range(n):
+                presence[i, 0] = bool((entity_texts[i] or "").strip())
+                presence[i, 1] = (
+                    relation_texts[i] != NEUTRAL_RELATION_TEXT
+                    and not bool(R_degenerate[i])
+                )
+                presence[i, 2] = (
+                    modifier_texts[i] != NEUTRAL_MODIFIER_TEXT
+                    and not bool(M_degenerate[i])
+                )
+
         logger.debug("Vectorized batch decoupled %d texts → shape %s", n, batch_tensor.shape)
+        if return_presence:
+            batch_out = batch_tensor.detach().cpu().numpy() if as_numpy else batch_tensor
+            return batch_out, presence
         if as_numpy:
             return batch_tensor.detach().cpu().numpy()
         return batch_tensor

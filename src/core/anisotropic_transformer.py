@@ -430,3 +430,72 @@ class AnisotropicTransformer:
         S = AnisotropicTransformer.compute_channel_similarities(Q, C_batch, weights)
         coeffs = np.array([alpha, beta, gamma], dtype=np.float32)
         return S @ coeffs
+
+    @staticmethod
+    def compute_masked_similarities(
+        Q: np.ndarray,
+        C_batch: np.ndarray,
+        weights: np.ndarray,
+        query_presence: np.ndarray,
+        candidate_presence: np.ndarray,
+        alpha: float = SCORE_WEIGHT_ENTITY,
+        beta: float = SCORE_WEIGHT_RELATION,
+        gamma: float = SCORE_WEIGHT_MODIFIER,
+        missing_prior: float = 0.20,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Query-conditioned channel-presence masking (Deliverable-B).
+
+        Channel weights are renormalized over the channels the QUERY
+        actively uses:
+
+            omega_k = w_k * p_k^Q / sum_j w_j * p_j^Q
+
+        A candidate that is missing a query-active channel (p_k^Q = 1,
+        p_k^C = 0) receives a calibrated prior similarity S_k^missing
+        (default 0.20) for that channel instead of the meaningless
+        neutral-anchor cosine. This is deliberately NOT the mutual product
+        p_k^Q * p_k^C: that variant disabled the modifier channel for every
+        neutrally-phrased query and let unannotated prose outscore
+        structured triples.
+
+        Parameters
+        ----------
+        Q : np.ndarray - shape (3, d), query HCAD matrix.
+        C_batch : np.ndarray - shape (N, 3, d), candidate HCAD matrices.
+        weights : np.ndarray - shape (d,), anisotropic weights.
+        query_presence : np.ndarray - shape (3,), bool; channel presence of the query.
+        candidate_presence : np.ndarray - shape (N, 3), bool; channel presence per candidate.
+        alpha, beta, gamma : float - base channel weights w_k.
+        missing_prior : float - S_k^missing in [0.15, 0.25].
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            (phi (N,), S_masked (N, 3)).
+        """
+        if len(C_batch) == 0:
+            return np.empty((0,), dtype=np.float32), np.empty((0, 3), dtype=np.float32)
+
+        S = AnisotropicTransformer.compute_channel_similarities(Q, C_batch, weights)
+
+        p_Q = np.asarray(query_presence, dtype=bool).ravel()
+        p_C = np.asarray(candidate_presence, dtype=bool).reshape(len(C_batch), 3)
+        w = np.array([alpha, beta, gamma], dtype=np.float64)
+
+        active = w * p_Q.astype(np.float64)
+        denom = float(active.sum())
+        if denom <= 0.0:
+            # Degenerate guard: a query whose channels all read absent must
+            # not collapse the denominator to 0 (total-retrieval-abstention
+            # bug). Fall back to the entity channel at full weight - the
+            # query text itself is always real content.
+            omega = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        else:
+            omega = active / denom
+
+        S_masked = np.asarray(S, dtype=np.float64).copy()
+        missing = p_Q[None, :] & ~p_C
+        S_masked[missing] = missing_prior
+
+        phi = S_masked @ omega
+        return phi.astype(np.float32), S_masked.astype(np.float32)

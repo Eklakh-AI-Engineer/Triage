@@ -261,6 +261,19 @@ Examples:
         help="Target joblib model artifact file path",
     )
     p_tt.set_defaults(func=cmd_train_tensor)
+
+    # retrieval-eval (Deliverable-B dev-pool harness)
+    p_re = subparsers.add_parser(
+        "retrieval-eval",
+        help="Deliverable-B: paired before/after retrieval eval (Recall@5/NDCG@5) on the dev pool",
+    )
+    p_re.add_argument(
+        "--question-pool", choices=["dev", "test"], default="dev",
+        help="Question pool (default dev - test stays untouched until GO)",
+    )
+    p_re.add_argument("--samples", type=int, default=60,
+                      help="Number of pool questions (default 60)")
+    p_re.set_defaults(func=cmd_retrieval_eval)
     p_save.set_defaults(func=cmd_save_pipeline)
 
     # serve (workbench API)
@@ -319,6 +332,29 @@ def cmd_train_tensor(args):
     retriever = HCADRetriever()
     result = train_tensor(retriever, questions, epochs=args.epochs, lr=args.lr)
     logger.info("Tensor training complete: %s", result)
+
+def cmd_retrieval_eval(args):
+    """Deliverable-B: paired before/after retrieval eval on the dev pool."""
+    from src.evaluation.dev_pool_retrieval import run_retrieval_eval
+
+    results = run_retrieval_eval(
+        num_samples=args.samples, pool=args.question_pool
+    )
+    decision = (results.get("go_stop") or {}).get("decision", "n/a")
+    logger.info("GO/STOP decision: %s", decision)
+    for name in ("baseline", "masking", "masking_vocab", "full"):
+        cfg = results.get(name)
+        if cfg:
+            logger.info(
+                "  %-13s Recall@5=%.4f  NDCG@5=%.4f",
+                name, cfg["mean_recall_at_k"], cfg["mean_ndcg_at_k"],
+            )
+    if results.get("delta_vs_baseline"):
+        d = results["delta_vs_baseline"]
+        logger.info(
+            "  delta vs baseline: dRecall@5=%+.4f  dNDCG@5=%+.4f",
+            d["recall_at_k"], d["ndcg_at_k"],
+        )
 
 def cmd_save_pipeline(args):
     """Serialize the entire HCAD-RAG pipeline into a joblib model artifact."""
