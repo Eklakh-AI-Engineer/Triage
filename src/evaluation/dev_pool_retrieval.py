@@ -44,10 +44,11 @@ logger = logging.getLogger(__name__)
 GO_DELTA_RECALL = 0.08
 GO_DELTA_NDCG = 0.06
 
-# (name, env overrides). The baseline disables masking and vocab mapping so
-# the paired comparison isolates exactly the Deliverable-B changes.
+# (name, env overrides). The baseline disables masking and vocab mapping and
+# pins the desc expansion rule so the paired comparison isolates exactly
+# the Deliverable-B changes against a pure Phase 3 baseline.
 CONFIGS = [
-    ("baseline", {"HCAD_PRESENCE_MASKING": "0", "HCAD_RELATION_VOCAB": "0"}),
+    ("baseline", {"HCAD_PRESENCE_MASKING": "0", "HCAD_RELATION_VOCAB": "0", "HCAD_EXPANSION_RULE": "desc"}),
     ("masking", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "0"}),
     ("masking_vocab", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "1"}),
 ]
@@ -133,6 +134,11 @@ def run_hub_ablation(
 
     hcad_rag = HCADRetriever(fail_on_vector_error=True)
     hcad_rag._ensure_components()
+    if getattr(getattr(hcad_rag, "_ner", None), "degraded", False):
+        raise RuntimeError(
+            "SciSpacy NER failed to load (BiomedicalNER in degraded regex "
+            "mode). Refusing to run dev-pool retrieval evaluation on degraded features."
+        )
 
     results: Dict[str, Any] = {
         "pool": pool,
@@ -266,6 +272,11 @@ def run_retrieval_eval(
 
     hcad_rag = HCADRetriever(fail_on_vector_error=True)
     hcad_rag._ensure_components()
+    if getattr(getattr(hcad_rag, "_ner", None), "degraded", False):
+        raise RuntimeError(
+            "SciSpacy NER failed to load (BiomedicalNER in degraded regex "
+            "mode). Refusing to run dev-pool retrieval evaluation on degraded features."
+        )
 
     results: Dict[str, Any] = {"pool": pool, "num_samples": len(samples), "k": RETRIEVAL_K}
 

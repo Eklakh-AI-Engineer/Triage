@@ -362,6 +362,8 @@ class BasePaperEvaluator:
         answer: str,
         reference_document: str,
         answer_evidence: str = "No retrieved evidence was supplied for this answer.",
+        retries: int = 1,
+        fallback_on_error: bool = False,
     ) -> ScoringResult:
         """
         Execute Scoring-Based Assessment (P_eval_scoring(q, R, T_0)).
@@ -377,47 +379,73 @@ class BasePaperEvaluator:
             )},
         ]
 
-        raw_response = self.judge.chat(messages, temperature=0.0)
-        data = self._extract_json(raw_response)
-        logger.debug("Judge raw evaluation response: %s", raw_response)
-        logger.debug("Judge parsed data: %s", data)
-
         score_fields = ("comprehensiveness", "diversity", "empowerment", "logical", "readability")
-        missing = [field for field in score_fields if field not in data]
-        if missing:
-            raise ValueError(f"Judge response is missing score fields: {', '.join(missing)}")
+        last_exc: Optional[Exception] = None
 
-        normalized = {}
-        for field in score_fields:
-            value = data[field]
-            if isinstance(value, dict):
-                value = value.get("score", value.get("level"))
+        for attempt in range(max(1, retries + 1)):
             try:
-                numeric_value = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"Judge returned a non-numeric {field} score") from exc
-            if not math.isfinite(numeric_value):
-                raise ValueError(f"Judge returned a non-finite {field} score")
-            normalized[field] = max(0.0, min(100.0, numeric_value))
+                raw_response = self.judge.chat(messages, temperature=0.0)
+                data = self._extract_json(raw_response)
+                logger.debug("Judge raw evaluation response: %s", raw_response)
+                logger.debug("Judge parsed data: %s", data)
 
-        comp = normalized["comprehensiveness"]
-        div = normalized["diversity"]
-        emp = normalized["empowerment"]
-        log = normalized["logical"]
-        read = normalized["readability"]
+                missing = [field for field in score_fields if field not in data]
+                if missing:
+                    raise ValueError(f"Judge response is missing score fields: {', '.join(missing)}")
 
-        overall = (comp + div + emp + log + read) / 5.0
-        rationale = str(data.get("rationale") or data.get("justification") or "")
+                normalized = {}
+                for field in score_fields:
+                    value = data[field]
+                    if isinstance(value, dict):
+                        value = value.get("score", value.get("level"))
+                    try:
+                        numeric_value = float(value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Judge returned a non-numeric {field} score") from exc
+                    if not math.isfinite(numeric_value):
+                        raise ValueError(f"Judge returned a non-finite {field} score")
+                    normalized[field] = max(0.0, min(100.0, numeric_value))
 
-        return ScoringResult(
-            comprehensiveness=comp,
-            diversity=div,
-            empowerment=emp,
-            logical=log,
-            readability=read,
-            overall_score=overall,
-            rationale=rationale,
-        )
+                comp = normalized["comprehensiveness"]
+                div = normalized["diversity"]
+                emp = normalized["empowerment"]
+                log = normalized["logical"]
+                read = normalized["readability"]
+
+                overall = (comp + div + emp + log + read) / 5.0
+                rationale = str(data.get("rationale") or data.get("justification") or "")
+
+                return ScoringResult(
+                    comprehensiveness=comp,
+                    diversity=div,
+                    empowerment=emp,
+                    logical=log,
+                    readability=read,
+                    overall_score=overall,
+                    rationale=rationale,
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Judge scoring attempt %d failed: %s", attempt + 1, exc
+                )
+
+        if fallback_on_error:
+            logger.warning(
+                "All scoring attempts failed (%s); returning neutral 50.0 fallback scores.",
+                last_exc,
+            )
+            return ScoringResult(
+                comprehensiveness=50.0,
+                diversity=50.0,
+                empowerment=50.0,
+                logical=50.0,
+                readability=50.0,
+                overall_score=50.0,
+                rationale=f"Fallback due to judge failure: {last_exc}",
+            )
+        assert last_exc is not None
+        raise last_exc
 
     # -----------------------------------------------------------------------
     # 2. Selection-Based Assessment (Pairwise Win-Rate, 8 Criteria)
@@ -433,6 +461,8 @@ class BasePaperEvaluator:
         label_b: str = "System B",
         evidence_a: str = "No retrieved evidence was supplied for this answer.",
         evidence_b: str = "No retrieved evidence was supplied for this answer.",
+        retries: int = 1,
+        fallback_on_error: bool = False,
     ) -> Dict[str, Any]:
         """
         Execute Selection-Based Assessment (P_eval_select(q, R_a, R_b)).
@@ -450,62 +480,84 @@ class BasePaperEvaluator:
             )},
         ]
 
-        raw_response = self.judge.chat(messages, temperature=0.0)
-        data = self._extract_json(raw_response)
+        last_exc: Optional[Exception] = None
 
-        missing_criteria = [crit for crit in self.CRITERIA_LIST if crit not in data]
-        if missing_criteria:
-            raise ValueError(
-                "Judge response is missing pairwise criteria: "
-                + ", ".join(missing_criteria)
+        for attempt in range(max(1, retries + 1)):
+            try:
+                raw_response = self.judge.chat(messages, temperature=0.0)
+                data = self._extract_json(raw_response)
+
+                missing_criteria = [crit for crit in self.CRITERIA_LIST if crit not in data]
+                if missing_criteria:
+                    raise ValueError(
+                        "Judge response is missing pairwise criteria: "
+                        + ", ".join(missing_criteria)
+                    )
+
+                criteria_winners = {}
+                for crit in self.CRITERIA_LIST:
+                    crit_obj = data.get(crit, {})
+                    if isinstance(crit_obj, dict):
+                        w = crit_obj.get("winner")
+                    elif isinstance(crit_obj, str):
+                        w = crit_obj
+                    else:
+                        raise ValueError(f"Judge returned malformed result for {crit}")
+
+                    # Map Answer 1 / Answer 2 back to caller labels
+                    w_str = str(w or "").strip()
+                    normalized_winner = w_str.casefold().replace(" ", "")
+                    if normalized_winner in {"answer1", "1"}:
+                        mapped_w = label_a
+                    elif normalized_winner in {"answer2", "2"}:
+                        mapped_w = label_b
+                    elif normalized_winner == "tie":
+                        mapped_w = "Tie"
+                    else:
+                        raise ValueError(f"Judge returned invalid winner for {crit}: {w_str!r}")
+                    criteria_winners[crit] = mapped_w
+
+                overall_raw = str(data.get("overall_winner", "Tie")).strip().casefold().replace(" ", "")
+                if overall_raw in {"answer1", "1"}:
+                    final_winner = label_a
+                elif overall_raw in {"answer2", "2"}:
+                    final_winner = label_b
+                elif overall_raw == "tie":
+                    final_winner = "Tie"
+                else:
+                    # Derive overall winner from majority of 8 qualitative criteria
+                    count_a = sum(1 for w in criteria_winners.values() if w == label_a)
+                    count_b = sum(1 for w in criteria_winners.values() if w == label_b)
+                    if count_a > count_b:
+                        final_winner = label_a
+                    elif count_b > count_a:
+                        final_winner = label_b
+                    else:
+                        final_winner = "Tie"
+
+                return {
+                    "criteria_winners": criteria_winners,
+                    "overall_winner": final_winner,
+                    "summary": data.get("summary", ""),
+                }
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Judge selection attempt %d failed: %s", attempt + 1, exc
+                )
+
+        if fallback_on_error:
+            logger.warning(
+                "All selection attempts failed (%s); returning neutral Tie fallback.",
+                last_exc,
             )
-
-        criteria_winners = {}
-        for crit in self.CRITERIA_LIST:
-            crit_obj = data.get(crit, {})
-            if isinstance(crit_obj, dict):
-                w = crit_obj.get("winner")
-            elif isinstance(crit_obj, str):
-                w = crit_obj
-            else:
-                raise ValueError(f"Judge returned malformed result for {crit}")
-
-            # Map Answer 1 / Answer 2 back to caller labels
-            w_str = str(w or "").strip()
-            normalized_winner = w_str.casefold().replace(" ", "")
-            if normalized_winner in {"answer1", "1"}:
-                mapped_w = label_a
-            elif normalized_winner in {"answer2", "2"}:
-                mapped_w = label_b
-            elif normalized_winner == "tie":
-                mapped_w = "Tie"
-            else:
-                raise ValueError(f"Judge returned invalid winner for {crit}: {w_str!r}")
-            criteria_winners[crit] = mapped_w
-
-        overall_raw = str(data.get("overall_winner", "Tie")).strip().casefold().replace(" ", "")
-        if overall_raw in {"answer1", "1"}:
-            final_winner = label_a
-        elif overall_raw in {"answer2", "2"}:
-            final_winner = label_b
-        elif overall_raw == "tie":
-            final_winner = "Tie"
-        else:
-            # Derive overall winner from majority of 8 qualitative criteria
-            count_a = sum(1 for w in criteria_winners.values() if w == label_a)
-            count_b = sum(1 for w in criteria_winners.values() if w == label_b)
-            if count_a > count_b:
-                final_winner = label_a
-            elif count_b > count_a:
-                final_winner = label_b
-            else:
-                final_winner = "Tie"
-
-        return {
-            "criteria_winners": criteria_winners,
-            "overall_winner": final_winner,
-            "summary": data.get("summary", ""),
-        }
+            return {
+                "criteria_winners": {crit: "Tie" for crit in self.CRITERIA_LIST},
+                "overall_winner": "Tie",
+                "summary": f"Fallback due to judge failure: {last_exc}",
+            }
+        assert last_exc is not None
+        raise last_exc
 
     # -----------------------------------------------------------------------
     # 3. Efficiency & Latency Benchmark

@@ -289,4 +289,13 @@ def test_semantic_decoupler_dynamic_cache_resolution(monkeypatch):
     cache = decoupler._get_cache()
     assert cache is not None
 
+def test_eval_dev_pool_baseline_pins_desc_expansion():
+    """Section F: Dev pool baseline arm pins desc expansion rule."""
+    from src.evaluation.dev_pool_retrieval import CONFIGS
+    baseline_env = dict(CONFIGS)[ "baseline" ]
+    assert baseline_env.get("HCAD_EXPANSION_RULE") == "desc"
+    assert baseline_env.get("HCAD_PRESENCE_MASKING") == "0"
+    assert baseline_env.get("HCAD_RELATION_VOCAB") == "0"
+
+
 

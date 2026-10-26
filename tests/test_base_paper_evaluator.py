@@ -23,6 +23,22 @@ class TestBasePaperEvaluator(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing score fields"):
             evaluator.evaluate_scoring("q", "a", "reference")
 
+    def test_scoring_fallback_on_error(self):
+        mock_judge = MagicMock()
+        mock_judge.chat.return_value = '{"comprehensiveness": 80}'
+        evaluator = BasePaperEvaluator(judge_llm=mock_judge)
+        res = evaluator.evaluate_scoring("q", "a", "reference", fallback_on_error=True)
+        self.assertEqual(res.overall_score, 50.0)
+        self.assertEqual(res.comprehensiveness, 50.0)
+
+    def test_selection_fallback_on_error(self):
+        mock_judge = MagicMock()
+        mock_judge.chat.return_value = '{"overall_winner": "bad"}'
+        evaluator = BasePaperEvaluator(judge_llm=mock_judge)
+        res = evaluator.evaluate_selection("q", "a", "b", "ref", fallback_on_error=True)
+        self.assertEqual(res["overall_winner"], "Tie")
+        self.assertTrue(all(w == "Tie" for w in res["criteria_winners"].values()))
+
     def test_json_parsing_and_scoring(self):
         mock_judge = MagicMock()
         mock_judge.chat.return_value = """

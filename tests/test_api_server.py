@@ -262,3 +262,20 @@ def test_benchmark_missing_results(tmp_path, monkeypatch):
     client = TestClient(server.app)
     res = client.get("/api/triage/benchmark")
     assert res.status_code == 404
+
+
+def test_triage_query_error_sanitization():
+    class FailingHCAD:
+        def retrieve(self, query, k=None):
+            raise RuntimeError("Database connection string password123 leaked")
+        def _ensure_components(self):
+            pass
+
+    server.provider = server.PipelineProvider()
+    server.provider._hcad = FailingHCAD()
+    client = TestClient(server.app)
+    res = client.post("/api/triage/query", json={"query": "Metformin and CKD"})
+    assert res.status_code == 500
+    assert res.json()["detail"] == "Internal pipeline processing error"
+    assert "password123" not in res.text
+

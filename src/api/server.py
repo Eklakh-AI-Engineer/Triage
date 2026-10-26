@@ -311,8 +311,8 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "substrate": {"name": "PrimeKG", "nodes": 129262, "edges": 4000956},
         }
     except Exception as exc:
-        logger.exception("triage query failed")
-        raise HTTPException(status_code=500, detail=f"pipeline error: {exc}") from exc
+        logger.exception("triage query failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal pipeline processing error") from exc
 
 # PrimeKG node_type -> workbench EntityType
 def _node_type(raw: str) -> str:
@@ -333,7 +333,8 @@ def subgraph(query: str = Query(..., min_length=3)) -> Dict[str, Any]:
     try:
         graph = hcad.graph  # lazy-loads the PrimeKG MultiDiGraph
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"knowledge graph unavailable: {exc}") from exc
+        logger.exception("Knowledge graph unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Knowledge graph unavailable") from exc
 
     # Resolve a center node from the query via the node-name index.
     center = None

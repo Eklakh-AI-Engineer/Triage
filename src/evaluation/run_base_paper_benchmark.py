@@ -639,6 +639,11 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
     hcad_rag._ensure_components()
     _ = hcad_rag.graph
     _ = hcad_rag.hypergraph
+    if getattr(getattr(hcad_rag, "_ner", None), "degraded", False):
+        raise RuntimeError(
+            "SciSpacy NER failed to load (BiomedicalNER in degraded regex "
+            "mode). Refusing to run base paper benchmark on degraded features."
+        )
 
     # Gate-mode guard: the Oct-25 run silently switched to the live TypeSafe
     # gate because a key was present in the environment, making it
@@ -727,12 +732,14 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         logger.info("  HCAD-RAG response (%d chars): %.120s...", len(resp_hcad), resp_hcad)
 
         # 2. Scoring-Based Assessment (0-100)
-        score_base = evaluator.evaluate_scoring(q, resp_baseline, ref)
+        score_base = evaluator.evaluate_scoring(
+            q, resp_baseline, ref, fallback_on_error=True
+        )
         score_van = evaluator.evaluate_scoring(
-            q, resp_vanilla, ref, answer_evidence=vanilla_evidence
+            q, resp_vanilla, ref, answer_evidence=vanilla_evidence, fallback_on_error=True
         )
         score_hcad = evaluator.evaluate_scoring(
-            q, resp_hcad, ref, answer_evidence=hcad_evidence
+            q, resp_hcad, ref, answer_evidence=hcad_evidence, fallback_on_error=True
         )
         logger.info("  Scores - Baseline: %.1f, Vanilla: %.1f, HCAD: %.1f",
                      score_base.overall_score, score_van.overall_score, score_hcad.overall_score)
@@ -768,12 +775,14 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             q, resp_hcad, resp_vanilla, ref,
             label_a="HCAD-RAG", label_b="Vanilla RAG",
             evidence_a=hcad_evidence, evidence_b=vanilla_evidence,
+            fallback_on_error=True,
         )
         # Run BA order (swap answers)
         sel_van_ba = evaluator.evaluate_selection(
             q, resp_vanilla, resp_hcad, ref,
             label_a="Vanilla RAG", label_b="HCAD-RAG",
             evidence_a=vanilla_evidence, evidence_b=hcad_evidence,
+            fallback_on_error=True,
         )
         # Merge: use AB result if both agree, otherwise Tie
         sel_van = _merge_selection_results(sel_van_ab, sel_van_ba, "HCAD-RAG")
@@ -782,11 +791,13 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             q, resp_hcad, resp_baseline, ref,
             label_a="HCAD-RAG", label_b="Baseline LLM",
             evidence_a=hcad_evidence,
+            fallback_on_error=True,
         )
         sel_base_ba = evaluator.evaluate_selection(
             q, resp_baseline, resp_hcad, ref,
             label_a="Baseline LLM", label_b="HCAD-RAG",
             evidence_b=hcad_evidence,
+            fallback_on_error=True,
         )
         sel_base = _merge_selection_results(sel_base_ab, sel_base_ba, "HCAD-RAG")
 
@@ -797,11 +808,13 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             q, resp_vanilla, resp_baseline, ref,
             label_a="Vanilla RAG", label_b="Baseline LLM",
             evidence_a=vanilla_evidence,
+            fallback_on_error=True,
         )
         sel_vb_ba = evaluator.evaluate_selection(
             q, resp_baseline, resp_vanilla, ref,
             label_a="Baseline LLM", label_b="Vanilla RAG",
             evidence_b=vanilla_evidence,
+            fallback_on_error=True,
         )
         sel_vb = _merge_selection_results(sel_vb_ab, sel_vb_ba, "Vanilla RAG")
 
