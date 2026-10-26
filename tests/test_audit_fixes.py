@@ -201,3 +201,65 @@ def test_relation_keyword_extraction():
     from src.core.relation_extractor import RelationExtractor
     kws = RelationExtractor().extract_keywords("Is metformin contraindicated in renal failure?")
     assert "contraindicated" in kws, kws
+
+def test_dead_math_removed_from_decoupler():
+    """Section A: Orphaned _orthogonalize and _soft_component removed."""
+    from src.core.semantic_decoupler import SemanticDecoupler
+    assert not hasattr(SemanticDecoupler, "_orthogonalize")
+    assert not hasattr(SemanticDecoupler, "_soft_component")
+    assert hasattr(SemanticDecoupler, "_absent_anchor")
+
+def test_context_document_prompt_builder():
+    """Section A: Unified context_document in prompt_builder."""
+    from src.core.prompt_builder import context_document
+    ctx1 = {"document": "Patient presents with chest pain."}
+    assert context_document(ctx1) == "Patient presents with chest pain."
+    ctx2 = {"metadata": {"head_name": "Aspirin", "display_relation": "treats", "tail_name": "Headache"}}
+    assert context_document(ctx2) == "Aspirin treats Headache"
+
+def test_relation_extractor_clause_boundary_and_mock_entities():
+    """Section D: Clause boundary regex has [?!\n] and handles mock entities without offsets."""
+    from src.core.relation_extractor import RelationExtractor
+    # Verify punctuation boundaries
+    assert RelationExtractor._CLAUSE_BOUNDARY_RE.search("Clause one? Clause two") is not None
+    assert RelationExtractor._CLAUSE_BOUNDARY_RE.search("Clause one! Clause two") is not None
+    assert RelationExtractor._CLAUSE_BOUNDARY_RE.search("Clause one\nClause two") is not None
+
+    # Verify mock entities without offsets
+    extractor = RelationExtractor()
+    text = "Metformin is indicated for diabetes mellitus."
+    mock_entities = {
+        "Drug": [{"text": "Metformin"}],
+        "Disease": [{"text": "diabetes mellitus"}],
+    }
+    rels = extractor.extract_rules(text, mock_entities)
+    assert len(rels) > 0
+    assert rels[0]["relation"] in ("TREATS", "INDICATED_FOR")
+
+def test_llm_client_ollama_timeout_from_config():
+    """Section A: UnifiedLLMClient references config timeout."""
+    import src.core.llm_client as client_mod
+    from src.config import LLM_OLLAMA_TIMEOUT_S
+    assert client_mod.OLLAMA_TIMEOUT_S == LLM_OLLAMA_TIMEOUT_S
+
+def test_knowledge_graph_min_rows_guard(tmp_path):
+    """Section B: PrimeKG graph build raises ValueError on truncated CSV."""
+    import pandas as pd
+    import pytest
+    from src.data.build_knowledge_graph import _build_graph_from_csv
+
+    truncated_csv = tmp_path / "truncated_primekg.csv"
+    df = pd.DataFrame({
+        "relation": ["treats"],
+        "display_relation": ["treats"],
+        "x_index": [1],
+        "y_index": [2],
+        "x_name": ["DrugA"],
+        "y_name": ["DiseaseB"],
+        "x_type": ["drug"],
+        "y_type": ["disease"],
+    })
+    df.to_csv(truncated_csv, index=False)
+    with pytest.raises(ValueError, match="truncated"):
+        _build_graph_from_csv(truncated_csv, min_rows=10)
+

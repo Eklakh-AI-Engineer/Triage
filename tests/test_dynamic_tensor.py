@@ -31,10 +31,10 @@ def _inputs():
 def test_forward_output_invariants():
     lam, a = _model()(*_inputs())
     assert lam.shape == (768,)
-    assert abs(float(lam.sum()) - 1.0) < 1e-4, "lambda must sum to 1"
-    assert float(lam.min()) > 0, "lambda must be positive"
+    assert abs(float(lam.detach().sum()) - 1.0) < 1e-4, "lambda must sum to 1"
+    assert float(lam.detach().min()) > 0, "lambda must be positive"
     assert a.shape == (3,)
-    assert abs(float(a.sum()) - 1.0) < 1e-4, "component weights must be a simplex"
+    assert abs(float(a.detach().sum()) - 1.0) < 1e-4, "component weights must be a simplex"
 
 
 def test_predictions_vary_with_query():

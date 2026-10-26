@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.config import EVIDENCE_WORD_BUDGET, FILTERING_K, RESULTS_DIR
+from src.core.prompt_builder import context_document
 
 logger = logging.getLogger(__name__)
 
@@ -113,15 +114,7 @@ def _map_entities(ner_result: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str,
                 )
     return entities
 
-def _context_document(context: Dict[str, Any]) -> str:
-    document = context.get("document") or context.get("text") or ""
-    if not document:
-        metadata = context.get("metadata") or {}
-        head = metadata.get("head_name", "")
-        relation = metadata.get("display_relation") or metadata.get("relation", "")
-        tail = metadata.get("tail_name", "")
-        document = f"{head} {relation} {tail}".strip()
-    return str(document)
+_context_document = context_document
 
 def _citation_id(index: int) -> str:
     return f"Evidence:{index}"

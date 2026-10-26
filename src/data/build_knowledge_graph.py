@@ -49,7 +49,9 @@ def _resolve_csv_path() -> Path:
 
 # Build helpers
 
-def _build_graph_from_csv(csv_path: Path) -> tuple[
+def _build_graph_from_csv(
+    csv_path: Path, min_rows: int = 100_000
+) -> tuple[
     nx.MultiDiGraph,
     dict[str, int],
     dict[str, list[int]],
@@ -93,6 +95,12 @@ def _build_graph_from_csv(csv_path: Path) -> tuple[
         raise ValueError(
             f"PrimeKG CSV is missing required columns: {missing}. "
             f"Found columns: {list(df.columns)}"
+        )
+
+    if len(df) < min_rows:
+        raise ValueError(
+            f"PrimeKG CSV appears truncated ({len(df)} rows < {min_rows} threshold). "
+            f"Check download integrity or rerun download_datasets."
         )
 
     # apply the DDI exclusion policy IN THE

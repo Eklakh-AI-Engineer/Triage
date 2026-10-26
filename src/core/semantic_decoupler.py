@@ -289,39 +289,6 @@ class SemanticDecoupler:
                 vec_np = self._model.encode(text, convert_to_numpy=True, normalize_embeddings=True)
             return torch.from_numpy(vec_np.astype(np.float32))
 
-    # PyTorch Gram-Schmidt orthogonalization
-    @staticmethod
-    def _orthogonalize(
-        E: torch.Tensor, R: torch.Tensor, M: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Apply soft Gram-Schmidt to reduce semantic interference while preserving relation semantics.
-
-        Uses a 0.7/0.3 blend between the orthogonalised and original
-        directions so that meaningful semantic overlap (e.g. entity-
-        relation coupling in biomedical text) is partially preserved.
-
-        Parameters
-        ----------
-        E, R, M : torch.Tensor
-            Raw embedding tensors of shape (d,).
-
-        Returns
-        -------
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-            Soft-orthonormalised E, R, M PyTorch Tensors.
-        """
-        eps = GS_EPS
-        eta = ORTHO_STRENGTH
-
-        # E stays as-is (first basis vector)
-        E_norm = torch.linalg.norm(E)
-        E_orth = E / (E_norm + eps)
-
-        R_orth = SemanticDecoupler._soft_component(R, [E_orth], eta, eps)
-        M_orth = SemanticDecoupler._soft_component(M, [E_orth, R_orth], eta, eps)
-
-        return E_orth, R_orth, M_orth
-
     @staticmethod
     def _absent_anchor(basis: list[torch.Tensor], d: int) -> torch.Tensor:
         """Deterministic unit vector orthogonal to all `basis` vectors.
@@ -350,35 +317,6 @@ class SemanticDecoupler:
             best = torch.zeros(d, dtype=torch.float32)
             best[-1] = 1.0
         return best
-
-    @staticmethod
-    def _soft_component(
-        v: torch.Tensor,
-        basis: list[torch.Tensor],
-        eta: float,
-        eps: float,
-    ) -> torch.Tensor:
-        """Soft Gram-Schmidt for one component with presence handling.
-
-        If the residual against `basis` is below GS_RESIDUAL_TOL, the
-        component carries no independent signal: substitute an orthogonal
-        anchor (presence = False upstream) instead of the original direction.
-        Otherwise blend eta * residual + (1 - eta) * original and renormalize.
-        """
-        d = v.shape[0]
-        v_unit = v / (torch.linalg.norm(v) + eps)
-        residual = v_unit.clone()
-        for b in basis:
-            residual = residual - torch.dot(residual, b) * b
-        # one re-orthogonalization pass (modified GS) to bound leakage
-        for b in basis:
-            residual = residual - torch.dot(residual, b) * b
-        residual_norm = torch.linalg.norm(residual)
-        if float(residual_norm) < GS_RESIDUAL_TOL:
-            return SemanticDecoupler._absent_anchor(basis, d)
-        residual_unit = residual / (residual_norm + eps)
-        blended = eta * residual_unit + (1.0 - eta) * v_unit
-        return blended / (torch.linalg.norm(blended) + eps)
 
     def decouple(
         self,

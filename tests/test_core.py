@@ -24,7 +24,7 @@ def print_section(title: str):
     print(f" {title}")
     print("=" * 70)
 
-def test_ner_and_relation_extractor():
+def _get_ner_and_relation_extractor():
     print_section("1. TESTING NER & RELATION EXTRACTION")
     from src.core.ner_extractor import BiomedicalNER, SimpleNER
     from src.core.relation_extractor import RelationExtractor
@@ -59,7 +59,10 @@ def test_ner_and_relation_extractor():
     print("✓ Stage 1 (NER, Relation & Modifier Extraction) successfully verified!")
     return entities, relations
 
-def test_semantic_decoupler():
+def test_ner_and_relation_extractor():
+    _get_ner_and_relation_extractor()
+
+def _get_semantic_decoupler():
     print_section("2. TESTING SEMANTIC DECOUPLER & GRAM-SCHMIDT ORTHOGONALIZATION")
     from src.core.semantic_decoupler import SemanticDecoupler
 
@@ -100,6 +103,9 @@ def test_semantic_decoupler():
     assert abs(norm_M - 1.0) < 1e-4
     print("✓ All basis vectors normalized to unit length (||v|| = 1.0)!")
     return decoupler, X
+
+def test_semantic_decoupler():
+    _get_semantic_decoupler()
 
 def run_anisotropic_transformer(decoupler, X_query):
     print_section("3. TESTING ANISOTROPIC TRANSFORMER & STRUCTURAL TRACE SIMILARITY")
@@ -227,13 +233,13 @@ _CACHED = {}
 @pytest.fixture(scope="session")
 def ner_relation_fixtures():
     if "ner" not in _CACHED:
-        _CACHED["ner"] = test_ner_and_relation_extractor()
+        _CACHED["ner"] = _get_ner_and_relation_extractor()
     return _CACHED["ner"]
 
 @pytest.fixture(scope="session")
 def decoupled_matrix():
     if "dec" not in _CACHED:
-        _CACHED["dec"] = test_semantic_decoupler()
+        _CACHED["dec"] = _get_semantic_decoupler()
     return _CACHED["dec"]
 
 def test_core_anisotropic(decoupled_matrix):

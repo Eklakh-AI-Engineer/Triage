@@ -7,9 +7,11 @@ from typing import Optional
 
 import requests
 
+from src.config import LLM_OLLAMA_TIMEOUT_S
+
 logger = logging.getLogger(__name__)
 
-OLLAMA_TIMEOUT_S = 120.0
+OLLAMA_TIMEOUT_S = LLM_OLLAMA_TIMEOUT_S
 
 class UnifiedLLMClient:
     """Unified LLM interface supporting Hugging Face Inference API with fallback.

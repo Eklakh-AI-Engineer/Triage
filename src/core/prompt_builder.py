@@ -1,6 +1,19 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from src.config import FEW_SHOT_COUNT, LLM_SYSTEM_PROMPT
+
+
+def context_document(context: Dict[str, Any]) -> str:
+    """Readable text of a retrieved context (mirrors the evidence formatter)."""
+    document = context.get("document") or context.get("text") or ""
+    if not document:
+        metadata = context.get("metadata") or {}
+        head = metadata.get("head_name", "")
+        relation = metadata.get("display_relation") or metadata.get("relation", "")
+        tail = metadata.get("tail_name", "")
+        document = f"{head} {relation} {tail}".strip()
+    return str(document)
+
 
 COT_EXEMPLARS = [
     {

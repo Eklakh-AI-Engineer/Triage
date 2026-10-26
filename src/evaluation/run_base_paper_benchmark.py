@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import EVIDENCE_WORD_BUDGET, RANDOM_SEED, RESULTS_DIR
+from src.core.prompt_builder import context_document
 from src.evaluation.base_paper_evaluator import BasePaperEvaluator
 from src.evaluation.metrics import citation_precision, mcnemar_test, ndcg_at_k, recall_at_k
 from src.wandb_tracking import log_base_paper_results, tracked_run, upload_checkpoint_artifact
@@ -181,16 +182,7 @@ _STOPWORDS = frozenset(
     "their there here they them we you he she his her our your my me us him".split()
 )
 
-def _context_document(context: Dict[str, Any]) -> str:
-    """Readable text of a retrieved context (mirrors the evidence formatter)."""
-    document = context.get("document") or context.get("text") or ""
-    if not document:
-        metadata = context.get("metadata") or {}
-        head = metadata.get("head_name", "")
-        relation = metadata.get("display_relation") or metadata.get("relation", "")
-        tail = metadata.get("tail_name", "")
-        document = f"{head} {relation} {tail}".strip()
-    return str(document)
+_context_document = context_document
 
 def _content_tokens(text: str) -> set:
     """Lowercased content tokens; stop- and short tokens dropped."""

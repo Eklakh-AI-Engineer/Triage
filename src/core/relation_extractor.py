@@ -152,7 +152,7 @@ class RelationExtractor:
     # a sentence/clause separator or a contrastive conjunction to negate a
     # relation stated in a different clause.
     _CLAUSE_BOUNDARY_RE = re.compile(
-        r"[.;,:]"
+        r"[.;,:?!\n]"
         r"|\b(?:however|but|although|though|whereas|while|yet|nevertheless|"
         r"nonetheless|conversely|in contrast|on the contrary)\b",
         re.IGNORECASE,
@@ -186,11 +186,14 @@ class RelationExtractor:
         """Negation cue detection bounded by clause boundaries (P2c).
 
         A cue negates the head->tail relation only if no clause boundary
-        (``[.;,:]`` or a contrastive conjunction) separates the cue from
+        (``[.;,:?!\n]`` or a contrastive conjunction) separates the cue from
         the head or the tail entity. This stops cues from a previous
         sentence ("X treats Y. However, aspirin should not be used with
         Z.") from negating relations stated in a later clause.
         """
+        if head_start < 0 or tail_start < 0:
+            return cls.detect_negation(text)
+
         window_start = max(0, head_start - lookback)
         window = text[window_start:tail_start]
         head_pos = head_start - window_start
@@ -275,19 +278,27 @@ class RelationExtractor:
                     # start=0/end=len(text), which zeroes out pair logic.
                     # Locate the actual mention instead.
                     if "start" not in entity_copy or entity_copy.get("start") is None:
-                        found = text.find(entity_copy["text"]) if entity_copy["text"] else -1
-                        entity_copy["start"] = max(found, 0)
-                        entity_copy["end"] = entity_copy["start"] + len(entity_copy["text"])
+                        ent_text = entity_copy.get("text", "")
+                        found = text.find(ent_text) if ent_text else -1
+                        if found == -1 and ent_text:
+                            found = text.lower().find(ent_text.lower())
+                        if found >= 0:
+                            entity_copy["start"] = found
+                            entity_copy["end"] = found + len(ent_text)
+                        else:
+                            entity_copy["start"] = None
+                            entity_copy["end"] = None
                     elif "end" not in entity_copy or entity_copy.get("end") is None:
-                        entity_copy["end"] = entity_copy["start"] + len(entity_copy["text"])
+                        start_pos = entity_copy.get("start", 0) or 0
+                        entity_copy["end"] = start_pos + len(entity_copy.get("text", ""))
                     flat_entities.append(entity_copy)
 
         if len(flat_entities) < 2:
             # Need at least two entities for a relation
             return self._single_entity_fallback(text, flat_entities)
 
-        # Sort by position
-        flat_entities.sort(key=lambda e: e.get("start", 0))
+        # Sort by position (entities with known offsets first)
+        flat_entities.sort(key=lambda e: (e.get("start") is None, e.get("start") or 0))
 
         relations: list[RelationDict] = []
         seen: set[tuple[str, str, str]] = set()
@@ -295,16 +306,23 @@ class RelationExtractor:
         for head, tail in product(flat_entities, repeat=2):
             if head is tail:
                 continue
-            # Only consider pairs where head precedes tail in text
-            head_start = head.get("start", 0)
-            tail_start = tail.get("start", 0)
-            if head_start >= tail_start:
-                continue
+            head_start = head.get("start")
+            tail_start = tail.get("start")
 
-            # Text span between the two entities
-            between_start = head.get("end", head_start)
-            between_end = tail.get("start", tail_start)
-            between_text = text[between_start:between_end]
+            if head_start is not None and tail_start is not None:
+                # Only consider pairs where head precedes tail in text
+                if head_start >= tail_start:
+                    continue
+                between_start = head.get("end", head_start)
+                between_end = tail.get("start", tail_start)
+                between_text = text[between_start:between_end]
+            else:
+                # Mock or unaligned entities lacking in-text offsets
+                head_start = -1
+                tail_start = -1
+                between_start = 0
+                between_end = len(text)
+                between_text = text
 
             for rel_type, patterns in _COMPILED_PATTERNS.items():
                 for pat in patterns:
@@ -329,8 +347,13 @@ class RelationExtractor:
                                 head.get("end", head_start),
                                 tail_start,
                             )
+                            modifier_span = (
+                                text[head_start:tail_end]
+                                if (head_start >= 0 and tail_end >= 0)
+                                else text
+                            )
                             modifier = self.extract_modifier(
-                                text[head_start:tail_end], entities
+                                modifier_span, entities
                             )
                             relations.append({
                                 "head": head_text,
