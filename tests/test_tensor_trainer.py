@@ -89,8 +89,8 @@ def test_adapter_learns_discriminative_channel():
         logp = torch.log_softmax(phi / 0.15, dim=-1)
         loss = -logp[gold].mean()
         if step == 0:
-            first_loss = float(loss)
-        last_loss = float(loss)
+            first_loss = float(loss.detach())
+        last_loss = float(loss.detach())
         opt.zero_grad()
         loss.backward()
         opt.step()

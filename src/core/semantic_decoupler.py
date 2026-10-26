@@ -91,6 +91,8 @@ class SemanticDecoupler:
 
     def _get_cache(self):
         """Resolve the shared decoupler cache (or None if disabled)."""
+        if self._cache is not None:
+            return self._cache
         from src.core.decoupler_cache import get_decoupler_cache
 
         return get_decoupler_cache(
