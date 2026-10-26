@@ -99,7 +99,7 @@ def test_adapter_learns_discriminative_channel():
     assert last_loss < first_loss, "loss must decrease"
     assert a_final[1] > a_final[0] and a_final[1] > a_final[2], \
         f"adapter must favor the discriminative channel, got {a_final}"
-    assert float(a_final[1]) > 0.4, f"relation weight must dominate: {a_final}"
+    assert float(a_final.detach()[1]) > 0.4, f"relation weight must dominate: {a_final}"
 
 
 def test_train_tensor_end_to_end_with_fake_retriever(tmp_path, monkeypatch):
@@ -167,9 +167,9 @@ def test_train_tensor_end_to_end_with_fake_retriever(tmp_path, monkeypatch):
 
     loaded = dt.load_channel_adapter(ckpt)
     lam, a = loaded(torch.zeros(3, 768), torch.rand(25))
-    assert abs(float(lam.sum()) - 1.0) < 1e-5, "lambda stays isotropic"
-    assert abs(float(a.sum()) - 1.0) < 1e-5, "channel weights stay on the simplex"
-    assert float(a[1]) > 0.4, "learned weights must favor the gold channel"
+    assert abs(float(lam.detach().sum()) - 1.0) < 1e-5, "lambda stays isotropic"
+    assert abs(float(a.detach().sum()) - 1.0) < 1e-5, "channel weights stay on the simplex"
+    assert float(a.detach()[1]) > 0.4, "learned weights must favor the gold channel"
 
 
 def test_train_tensor_refuses_non_dev_pools():
