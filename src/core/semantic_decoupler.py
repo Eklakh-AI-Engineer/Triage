@@ -90,18 +90,15 @@ class SemanticDecoupler:
             self._load_model()
 
     def _get_cache(self):
-        """Resolve the shared decoupler cache once (or None if disabled)."""
-        if not self._cache_resolved:
-            self._cache_resolved = True
-            from src.core.decoupler_cache import get_decoupler_cache
+        """Resolve the shared decoupler cache (or None if disabled)."""
+        from src.core.decoupler_cache import get_decoupler_cache
 
-            self._cache = get_decoupler_cache(
-                extra_version_components=[
-                    "rel_kw=" + json.dumps(sorted(_RELATION_KEYWORDS)),
-                    "mod_kw=" + json.dumps(sorted(_MODIFIER_KEYWORDS)),
-                ]
-            )
-        return self._cache
+        return get_decoupler_cache(
+            extra_version_components=[
+                "rel_kw=" + json.dumps(sorted(_RELATION_KEYWORDS)),
+                "mod_kw=" + json.dumps(sorted(_MODIFIER_KEYWORDS)),
+            ]
+        )
 
     # Model loading
     def _load_model(self) -> None:

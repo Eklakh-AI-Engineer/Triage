@@ -263,3 +263,30 @@ def test_knowledge_graph_min_rows_guard(tmp_path):
     with pytest.raises(ValueError, match="truncated"):
         _build_graph_from_csv(truncated_csv, min_rows=10)
 
+def test_decoupler_cache_flush_and_dirty_handling(tmp_path):
+    """Section E: DecouplerCache dirty tracking and atomic flush."""
+    from src.core.decoupler_cache import DecouplerCache
+    cache = DecouplerCache("test_v1", disk_dir=tmp_path)
+    assert cache._disk_dirty == 0
+    cache.flush()  # clean flush does nothing
+    assert not (tmp_path / "decoupler_components_test_v1.jsonl").exists()
+
+    cache.put_components("text A", "ent", "rel", "mod")
+    assert cache._disk_dirty == 1
+    cache.flush()
+    assert cache._disk_dirty == 0
+    disk_file = tmp_path / "decoupler_components_test_v1.jsonl"
+    assert disk_file.exists()
+
+def test_semantic_decoupler_dynamic_cache_resolution(monkeypatch):
+    """Section E: SemanticDecoupler._get_cache dynamically respects HCAD_DECOUPLER_CACHE."""
+    from src.core.semantic_decoupler import SemanticDecoupler
+    decoupler = SemanticDecoupler(lazy=True)
+    monkeypatch.setenv("HCAD_DECOUPLER_CACHE", "0")
+    assert decoupler._get_cache() is None
+
+    monkeypatch.setenv("HCAD_DECOUPLER_CACHE", "1")
+    cache = decoupler._get_cache()
+    assert cache is not None
+
+

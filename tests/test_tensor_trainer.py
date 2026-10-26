@@ -53,7 +53,7 @@ def test_old_simplex_score_function_is_identically_zero():
     # float32 summation over 768 terms leaves ~1e-5 rounding residue;
     # a live score would be O(1/sigma^2) - the point is it is dead, not
     # bit-exact.
-    assert abs(float(gl)) < 1e-3, "simplex-sum score must be ~zero"
+    assert abs(float(gl.detach())) < 1e-3, "simplex-sum score must be ~zero"
     gl.backward()
     assert logits.grad is None or float(logits.grad.norm()) < 1e-4, \
         "the old score function carries no gradient"

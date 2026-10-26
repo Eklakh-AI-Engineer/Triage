@@ -23,6 +23,7 @@ persist to a small JSONL sidecar so restored sessions keep their NER work.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import logging
@@ -108,6 +109,7 @@ class DecouplerCache:
         self.n_embed_hits = 0
         self.n_embed_misses = 0
         self._load_disk()
+        atexit.register(self.flush)
 
     # -- component strings (t_E, t_R, t_M) ---------------------------------
 
@@ -156,7 +158,7 @@ class DecouplerCache:
 
     def flush(self) -> None:
         """Persist new component entries to the versioned sidecar."""
-        if not self._components:
+        if not self._components or self._disk_dirty == 0:
             return
         try:
             self.disk_dir.mkdir(parents=True, exist_ok=True)

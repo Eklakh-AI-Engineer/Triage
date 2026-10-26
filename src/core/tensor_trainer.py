@@ -42,6 +42,7 @@ from src.config import (
     SCORE_WEIGHT_ENTITY,
     SCORE_WEIGHT_MODIFIER,
     SCORE_WEIGHT_RELATION,
+    presence_masking_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,13 @@ def train_tensor(
             finally:
                 retriever._tensor_override = None
             inputs = getattr(retriever, "_last_tensor_inputs", None)
-            sims = getattr(retriever, "_last_channel_sims", None)
+            masked_sims = getattr(retriever, "_last_masked_sims", None)
+            if presence_masking_enabled() and masked_sims is not None:
+                sims = masked_sims
+                q_presence = getattr(retriever, "_last_query_presence", None)
+            else:
+                sims = getattr(retriever, "_last_channel_sims", None)
+                q_presence = None
             pool = getattr(retriever, "_last_candidate_pool", None)
             if inputs is None or sims is None or not pool:
                 continue
@@ -176,8 +183,24 @@ def train_tensor(
 
             # 3) exact differentiable listwise loss: push the adapter's
             #    Phi = S @ a(Q) above the pool's non-gold candidates.
+            #    When presence masking is enabled, match inference weighting:
+            #    omega = (a * p_Q) / sum(a * p_Q)
             a = adapter(feats)                       # (3,)
-            phi = S @ a                               # (N,)
+            if q_presence is not None:
+                p_Q = torch.tensor(
+                    np.asarray(q_presence, dtype=np.float32).ravel(),
+                    device=a.device,
+                    dtype=a.dtype,
+                )
+                active = a * p_Q
+                denom = active.sum()
+                if float(denom.detach()) <= 0.0:
+                    omega = torch.tensor([1.0, 0.0, 0.0], device=a.device, dtype=a.dtype)
+                else:
+                    omega = active / denom
+                phi = S @ omega
+            else:
+                phi = S @ a                               # (N,)
             logp = torch.log_softmax(phi / tau, dim=-1)
             loss = -logp[positives].mean()
 
