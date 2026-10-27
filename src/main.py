@@ -233,7 +233,7 @@ Examples:
         "base-paper", help="Run the base-paper protocol benchmark (scoring + selection + latency)",
     )
     p_bp.add_argument(
-        "--question-pool", choices=["test", "dev"], default="test",
+        "--pool", "--question-pool", dest="question_pool", choices=["test", "dev"], default="test",
         help="Question pool: test (held-out evaluation) or dev (training/tuning)",
     )
     p_bp.add_argument(
@@ -268,7 +268,7 @@ Examples:
         help="Deliverable-B: paired before/after retrieval eval (Recall@5/NDCG@5) on the dev pool",
     )
     p_re.add_argument(
-        "--question-pool", choices=["dev", "test"], default="dev",
+        "--pool", "--question-pool", dest="question_pool", choices=["dev", "test"], default="dev",
         help="Question pool (default dev - test stays untouched until GO)",
     )
     p_re.add_argument("--samples", type=int, default=60,
@@ -281,7 +281,7 @@ Examples:
         help="Phase 4a: neighbor-expansion-rule ablation (desc/soft/asc_cap) on the dev pool",
     )
     p_hub.add_argument(
-        "--question-pool", choices=["dev", "test"], default="dev",
+        "--pool", "--question-pool", dest="question_pool", choices=["dev", "test"], default="dev",
         help="Question pool (default dev)",
     )
     p_hub.add_argument("--samples", type=int, default=60,

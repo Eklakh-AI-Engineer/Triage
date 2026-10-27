@@ -298,4 +298,39 @@ def test_eval_dev_pool_baseline_pins_desc_expansion():
     assert baseline_env.get("HCAD_RELATION_VOCAB") == "0"
 
 
+def test_cli_pool_and_question_pool_arguments():
+    """Verify CLI accepts both --pool and --question-pool for retrieval-eval, hub-eval, base-paper."""
+    import argparse
+    from src.main import main
+
+    # Inspect parser configuration via a non-executing check
+    import sys
+    from unittest.mock import patch
+
+    # retrieval-eval
+    with patch.object(sys, "argv", ["triage", "retrieval-eval", "--pool", "dev", "--samples", "10"]):
+        with patch("src.main.cmd_retrieval_eval") as mock_cmd:
+            main()
+            args = mock_cmd.call_args[0][0]
+            assert args.question_pool == "dev"
+            assert args.samples == 10
+
+    # hub-eval
+    with patch.object(sys, "argv", ["triage", "hub-eval", "--pool", "dev", "--samples", "10"]):
+        with patch("src.main.cmd_hub_eval") as mock_cmd:
+            main()
+            args = mock_cmd.call_args[0][0]
+            assert args.question_pool == "dev"
+            assert args.samples == 10
+
+    # base-paper
+    with patch.object(sys, "argv", ["triage", "base-paper", "--pool", "test", "--samples", "5"]):
+        with patch("src.main.cmd_base_paper") as mock_cmd:
+            main()
+            args = mock_cmd.call_args[0][0]
+            assert args.question_pool == "test"
+            assert args.samples == 5
+
+
+
 
