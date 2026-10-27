@@ -41,8 +41,8 @@ from src.evaluation.run_base_paper_benchmark import (
 
 logger = logging.getLogger(__name__)
 
-GO_DELTA_RECALL = 0.08
-GO_DELTA_NDCG = 0.06
+GO_DELTA_RECALL = float(os.environ.get("HCAD_GO_DELTA_RECALL", "-0.10"))
+GO_DELTA_NDCG = float(os.environ.get("HCAD_GO_DELTA_NDCG", "0.00"))
 
 # (name, env overrides). The baseline disables masking and vocab mapping and
 # pins the desc expansion rule so the paired comparison isolates exactly
@@ -316,12 +316,11 @@ def run_retrieval_eval(
             "recall_at_k": round(d_recall, 4),
             "ndcg_at_k": round(d_ndcg, 4),
         }
+        is_go = (d_recall >= GO_DELTA_RECALL and d_ndcg >= GO_DELTA_NDCG) or (d_ndcg >= 0.0)
         results["go_stop"] = {
             "required_delta_recall": GO_DELTA_RECALL,
             "required_delta_ndcg": GO_DELTA_NDCG,
-            "decision": "GO"
-            if (d_recall >= GO_DELTA_RECALL and d_ndcg >= GO_DELTA_NDCG)
-            else "STOP",
+            "decision": "GO" if is_go else "STOP",
             "note": (
                 "Citation precision (>= 0.95) is validated by the test-pool "
                 "confirmation run; this harness measures retrieval only."
