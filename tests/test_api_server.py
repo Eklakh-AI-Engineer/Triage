@@ -273,6 +273,8 @@ def test_triage_query_error_sanitization():
 
     server.provider = server.PipelineProvider()
     server.provider._hcad = FailingHCAD()
+    server.provider._vanilla = StubVanilla()
+    server.provider._baseline = StubBaseline()
     client = TestClient(server.app)
     res = client.post("/api/triage/query", json={"query": "Metformin and CKD"})
     assert res.status_code == 500
