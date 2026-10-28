@@ -321,7 +321,27 @@ def run_retrieval_eval(
         logger.info("Evaluating configuration: %s", name)
         results[name] = _evaluate_config(hcad_rag, samples, env)
 
-    # 4: full configuration with the Gate-2 saturation cap. tau_sat is
+    # Diagnostic recommended in the review: isolate the saturation cap
+    # while preserving legacy retrieval defaults (masking/vocab OFF).
+    # Calibrate this cap from the legacy baseline's own gold dev scores.
+    baseline_tau = results["baseline"]["gold_score_percentiles"]["p25"]
+    if baseline_tau is None:
+        results["baseline_with_tau_cap"] = None
+        logger.warning("No baseline gold candidate scores; baseline cap ablation unavailable.")
+    else:
+        results["baseline_tau_sat"] = round(float(baseline_tau), 4)
+        results["baseline_with_tau_cap"] = _evaluate_config(
+            hcad_rag,
+            samples,
+            {
+                "HCAD_PRESENCE_MASKING": "0",
+                "HCAD_RELATION_VOCAB": "0",
+                "HCAD_EXPANSION_RULE": "desc",
+                "HCAD_TAU_SAT": str(baseline_tau),
+            },
+        )
+
+    # Full configuration with the Gate-2 saturation cap. tau_sat is
     # calibrated from the gold candidate scores of the masking+vocab run -
     # calibration and measurement both stay on the dev pool.
     tau_sat_value = results["masking_vocab"]["gold_score_percentiles"]["p25"]
