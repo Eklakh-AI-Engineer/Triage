@@ -1,6 +1,7 @@
 """Regression tests for adaptive retrieval filtering and evaluation gates."""
 
 import importlib
+from typing import get_type_hints
 
 import numpy as np
 import pytest
@@ -97,3 +98,10 @@ def test_environment_can_only_tighten_preregistered_go_gate(monkeypatch):
     monkeypatch.delenv("HCAD_GO_DELTA_RECALL", raising=False)
     monkeypatch.delenv("HCAD_GO_DELTA_NDCG", raising=False)
     importlib.reload(dev_pool_retrieval)
+
+
+
+def test_filter_type_annotations_resolve_without_optional_torch_import():
+    hints = get_type_hints(StatisticalFilter.compute_threshold)
+    assert "scores" in hints
+    assert hints["scores"] is np.ndarray
