@@ -70,18 +70,21 @@ class StatisticalFilter:
         Gate 1: absolute quality floor - reject anything below min_score.
         Gate 2: relative Heaviside threshold on surviving candidates.
         """
-        if not contexts:
-            return []
-
-        scores = np.asarray(scores, dtype=float).reshape(-1)
+        scores = np.asarray(scores, dtype=float)
+        if scores.ndim != 1:
+            raise ValueError(f"Expected a 1-D score array, got shape {scores.shape}")
         if len(contexts) != len(scores):
             raise ValueError(f"Mismatch: {len(contexts)} contexts vs {len(scores)} scores")
         if not np.isfinite(scores).all():
             raise ValueError("Non-finite scores supplied to context filtering")
         if not np.isfinite(min_score):
             raise ValueError("min_score must be finite")
-        if max_top_k is not None and max_top_k < 0:
-            raise ValueError("max_top_k must be non-negative or None")
+        if max_top_k is not None and (
+            not isinstance(max_top_k, int) or isinstance(max_top_k, bool) or max_top_k < 0
+        ):
+            raise ValueError("max_top_k must be a non-negative integer or None")
+        if not contexts:
+            return []
 
         # Gate 1: absolute quality floor
         above_floor = scores >= min_score
