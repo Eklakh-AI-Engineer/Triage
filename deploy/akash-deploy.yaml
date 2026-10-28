@@ -1,12 +1,11 @@
 # Akash SDL — 1x NVIDIA A100.
-# Easiest path: import this file at https://console.akash.network and pick
-# "A100" in the GPU filter; the console rewrites the provider attribute
-# filters for you. Bids come from datacenter providers, not home nodes.
+# Build and publish the image from the Triage repository before deploying.
+# Replace <your-dockerhub-user> with the Docker Hub namespace that owns the image.
 ---
 version: "2.0"
 services:
-  hcad:
-    image: docker.io/<your-dockerhub-user>/hcad-rag:a100
+  triage:
+    image: docker.io/<your-dockerhub-user>/triage:a100
     expose:
       - port: 22
         as: 22
@@ -24,7 +23,7 @@ services:
 
 profiles:
   compute:
-    hcad:
+    triage:
       resources:
         gpu:
           units: 1
@@ -41,12 +40,12 @@ profiles:
       attributes:
         host: akash
       pricing:
-        hcad:
+        triage:
           denom: uakt
           amount: 400000
 
 deployment:
-  hcad:
-    hcad:
-      profile: hcad
+  triage:
+    triage:
+      profile: triage
       count: 1
