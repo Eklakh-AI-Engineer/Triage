@@ -286,3 +286,21 @@ def test_triage_query_error_sanitization():
     assert res.json()["detail"] == "Internal pipeline processing error"
     assert "password123" not in res.text
 
+
+
+def test_api_evidence_budget_keeps_complete_sentences_and_qualifiers():
+    contexts = [
+        {"document": "Metformin is contraindicated in severe renal failure. "
+                     "It must not be used in this condition.", "metadata": {}},
+    ]
+    bounded = server._budget_evidence_contexts(contexts, word_budget=9)
+    assert len(bounded) == 1
+    assert bounded[0]["document"] == "Metformin is contraindicated in severe renal failure."
+    assert bounded[0]["document"].endswith(".")
+    assert "contraindicated" in bounded[0]["document"]
+    assert "contraindicated in severe renal failure" in bounded[0]["document"]
+
+
+def test_api_evidence_budget_drops_oversized_unterminated_fragment():
+    contexts = [{"document": " ".join(["clinical"] * 150), "metadata": {}}]
+    assert server._budget_evidence_contexts(contexts, word_budget=10) == []
