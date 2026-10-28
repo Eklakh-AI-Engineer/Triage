@@ -137,14 +137,17 @@ def validate_integrity_manifest(
     if not str(manifest.get("build_version", "")).strip():
         raise ArtifactIntegrityError("Manifest is missing build_version")
 
+    # Verify every recorded source by default; a manifest with stale paths
+    # or hashes is not sufficient provenance for a benchmark.
+    for raw_record_path, record in inputs.items():
+        input_path = Path(raw_record_path)
+        actual = sha256_file(input_path)
+        if not isinstance(record, dict) or record.get("sha256") != actual:
+            raise ArtifactIntegrityError(f"Input hash mismatch for {input_path}")
     for raw_path in required_input_paths:
         input_path = Path(raw_path)
-        record = inputs.get(str(input_path))
-        if not record:
+        if str(input_path) not in inputs:
             raise ArtifactIntegrityError(f"Manifest does not record required input: {input_path}")
-        actual = sha256_file(input_path)
-        if record.get("sha256") != actual:
-            raise ArtifactIntegrityError(f"Input hash mismatch for {input_path}")
     return manifest
 
 
