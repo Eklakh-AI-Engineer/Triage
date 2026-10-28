@@ -41,11 +41,32 @@ from src.evaluation.run_base_paper_benchmark import (
 
 logger = logging.getLogger(__name__)
 
-# Keep code defaults aligned with the documented acceptance criteria.
-# Overrides are allowed for explicitly approved experiments, not to silently
-# relax the release gate.
-GO_DELTA_RECALL = float(os.environ.get("HCAD_GO_DELTA_RECALL", "0.08"))
-GO_DELTA_NDCG = float(os.environ.get("HCAD_GO_DELTA_NDCG", "0.06"))
+# Pre-registered minimum acceptance criteria. Environment overrides may
+# make the gate stricter, but can never silently relax the release criteria.
+_MIN_GO_DELTA_RECALL = 0.08
+_MIN_GO_DELTA_NDCG = 0.06
+
+
+def _gate_target(name: str, minimum: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return minimum
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    if value < minimum:
+        raise ValueError(
+            f"{name}={value} weakens the pre-registered minimum {minimum}; "
+            "gate targets may only be made stricter."
+        )
+    return value
+
+
+GO_DELTA_RECALL = _gate_target("HCAD_GO_DELTA_RECALL", _MIN_GO_DELTA_RECALL)
+GO_DELTA_NDCG = _gate_target("HCAD_GO_DELTA_NDCG", _MIN_GO_DELTA_NDCG)
 
 # (name, env overrides). The baseline disables masking and vocab mapping and
 # pins the desc expansion rule so the paired comparison isolates exactly
