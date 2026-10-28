@@ -623,6 +623,21 @@ def generate_paper_protocol_questions(num_samples: int, generator=None,
 def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                   question_pool: str = "test"):
     """Execute complete base paper evaluation benchmark across the 3 systems."""
+    # Fail closed: results are not publishable without a complete corpus/index
+    # manifest tied to the exact source inputs and embedding/index versions.
+    from src.evaluation.integrity import validate_integrity_manifest
+    manifest_path = Path(os.getenv(
+        "TRIAGE_INTEGRITY_MANIFEST",
+        str(PROJECT_ROOT / "data" / "processed" / "integrity_manifest.json"),
+    ))
+    integrity_manifest = validate_integrity_manifest(manifest_path)
+    logger.info(
+        "Artifact integrity validated: index=%s version=%s documents=%s",
+        integrity_manifest["index"]["name"],
+        integrity_manifest["index"]["version"],
+        integrity_manifest["index"]["indexed_document_count"],
+    )
+
     logger.info("Initializing Base Paper Evaluator...")
     evaluator = BasePaperEvaluator()
 
@@ -874,11 +889,28 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
 
     # Compute aggregate statistics
     def calc_mean_scores(score_records: List[Dict[str, Any]]) -> Dict[str, float]:
-        if not score_records:
+        # Neutral fallback scores are diagnostic only, never primary results.
+        valid_records = [
+            r for r in score_records
+            if not str(r.get("rationale", "")).startswith("Fallback due to judge failure:")
+        ]
+        if not valid_records:
             return {}
         dims = ["comprehensiveness", "diversity", "empowerment", "logical", "readability", "overall_score"]
-        return {dim: sum(r[dim] for r in score_records) / len(score_records) for dim in dims}
+        return {dim: sum(r[dim] for r in valid_records) / len(valid_records) for dim in dims}
 
+    judge_coverage = {}
+    for system_name, score_records in records["scoring"].items():
+        failed = sum(
+            str(r.get("rationale", "")).startswith("Fallback due to judge failure:")
+            for r in score_records
+        )
+        judge_coverage[system_name] = {
+            "total_questions": len(score_records),
+            "valid_judgements": len(score_records) - failed,
+            "fallback_scores_excluded": failed,
+            "coverage": (len(score_records) - failed) / len(score_records) if score_records else 0.0,
+        }
     final_scores = {sys_name: calc_mean_scores(recs) for sys_name, recs in records["scoring"].items()}
     scores_by_source = {
         source: {sys_name: calc_mean_scores(recs) for sys_name, recs in source_records.items()}
