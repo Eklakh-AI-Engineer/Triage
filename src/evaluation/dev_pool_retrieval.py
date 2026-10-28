@@ -72,7 +72,7 @@ GO_DELTA_NDCG = _gate_target("HCAD_GO_DELTA_NDCG", _MIN_GO_DELTA_NDCG)
 # pins the desc expansion rule so the paired comparison isolates exactly
 # the Deliverable-B changes against a pure Phase 3 baseline.
 CONFIGS = [
-    ("baseline", {"HCAD_PRESENCE_MASKING": "0", "HCAD_RELATION_VOCAB": "0", "HCAD_EXPANSION_RULE": "desc"}),
+    ("baseline", {"HCAD_PRESENCE_MASKING": "0", "HCAD_RELATION_VOCAB": "0", "HCAD_EXPANSION_RULE": "desc", "HCAD_TAU_SAT": None}),
     ("masking", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "0"}),
     ("masking_vocab", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "1"}),
 ]
