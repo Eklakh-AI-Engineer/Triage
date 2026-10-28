@@ -191,11 +191,12 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
     query = request.query.strip()
 
     provider.total_queries += 1
+    request_started = time.perf_counter()
 
     try:
-        t0 = time.perf_counter()
+        retrieval_started = time.perf_counter()
         hcad_contexts = hcad.retrieve(query, k=_gate_k_for(config))
-        latency_ms = (time.perf_counter() - t0) * 1000.0
+        retrieval_latency_ms = (time.perf_counter() - retrieval_started) * 1000.0
 
         # Entities via the same NER the retriever uses.
         try:
@@ -243,8 +244,8 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "alpha": config.alphaDecoupling,
         }
 
-        # Gate: admitted contexts carry phi_final; JEV is their mean, entropy
-        # delta the negative score spread (judge-distribution proxy).
+        # Telemetry describes observed retrieval scores; score spread is not
+        # entropy and is never labelled as an entropy delta.
         phi = [float(c.get("phi_final", c.get("score", 0.0)) or 0.0)
                for c in hcad_contexts]
         jev = round(sum(phi) / len(phi), 4) if phi else 0.0
@@ -263,10 +264,14 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
         gate = {
             "decision": "PASS" if passed else "ABSTAIN",
             "jev": jev,
-            "entropyDelta": round(-spread, 4),
+            "scoreSpread": round(spread, 4),
+            "scoreSpreadDefinition": "max(phi_final or score) - min(phi_final or score); 0 when fewer than 2 contexts",
             "tauEntropy": config.tauEntropy,
+            "candidateCount": len(pool),
             "admittedCount": len(hcad_contexts),
-            "contextWords": min(config.wordBudget, context_words),
+            "contextWords": context_words,
+            "wordBudget": config.wordBudget,
+            "output": "ABSTAIN" if not hcad_contexts else "PASS",
             "groundedMode": grounded_mode,
         }
 
@@ -307,7 +312,10 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "arena": arena,
             "citations": citations,
             "abstentionRate": _session_abstention_rate(),
-            "latencyMs": round(latency_ms, 1),
+            "retrievalLatencyMs": round(retrieval_latency_ms, 1),
+            "endToEndLatencyMs": round((time.perf_counter() - request_started) * 1000.0, 1),
+            # Backwards-compatible alias: latencyMs now means end-to-end latency.
+            "latencyMs": round((time.perf_counter() - request_started) * 1000.0, 1),
             "substrate": {"name": "PrimeKG", "nodes": 129262, "edges": 4000956},
         }
     except Exception as exc:
