@@ -28,10 +28,14 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Install project dependencies
+      - name: Install project dependencies (CPU-only PyTorch)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          # The default PyPI torch wheel pulls CUDA libraries and exhausts the
+          # GitHub-hosted runner disk. CI tests CPU code, so constrain torch to
+          # the CPU wheel while preserving the project's dependency resolver.
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            -c .github/constraints-ci.txt -r requirements.txt
 
       - name: Install pinned SciSpacy NER models
         run: |
