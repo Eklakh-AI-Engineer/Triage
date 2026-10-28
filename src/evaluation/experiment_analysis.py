@@ -20,7 +20,7 @@ def paired_bootstrap_delta(baseline: list[float], treatment: list[float], *,
         "seed": seed, "iterations": iterations}
 
 def compare_ablation_bundles(baseline_path: str | Path, ablation_paths: list[str | Path], *,
-                             metric: str = "end_to_end_latency_ms") -> dict[str, Any]:
+                             metric: str = "systems.triage.end_to_end_latency_ms") -> dict[str, Any]:
     """Compare aligned bundles; metric values must be independently computed per question."""
     baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
     base_rows = baseline.get("per_question", [])
@@ -33,9 +33,14 @@ def compare_ablation_bundles(baseline_path: str | Path, ablation_paths: list[str
         rows = treatment.get("per_question", [])
         if [row["question_id"] for row in rows] != base_ids:
             raise ValueError(f"Question IDs/order differ in ablation bundle {path}")
+        def metric_value(row: dict[str, Any]) -> float:
+            value: Any = row
+            for key in metric.split("."):
+                value = value[key]
+            return float(value)
         try:
-            a = [float(row["metrics"][metric]) for row in base_rows]
-            b = [float(row["metrics"][metric]) for row in rows]
+            a = [metric_value(row) for row in base_rows]
+            b = [metric_value(row) for row in rows]
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Both bundles must contain per-question metric {metric!r}") from exc
         comparisons.append({"ablation_bundle": str(path), "metric": metric,
