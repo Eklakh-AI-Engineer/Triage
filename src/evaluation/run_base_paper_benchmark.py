@@ -1014,7 +1014,15 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
 
     # Robustness metric 4: exact McNemar test on paired per-question
     # correctness (overall_score >= CORRECTNESS_THRESHOLD counts as correct).
-    per_question = records["per_question"]
+    per_question = [
+        rec for rec in records["per_question"]
+        if all(
+            not str(rec.get("scores", {}).get(system, {}).get("rationale", "")).startswith(
+                "Fallback due to judge failure:"
+            )
+            for system in ("Baseline LLM", "Vanilla RAG", "HCAD-RAG")
+        )
+    ]
 
     def _correct_flags(system: str) -> List[bool]:
         return [
@@ -1059,8 +1067,17 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         },
         "scoring_based_assessment": final_scores,
         "scoring_by_difficulty_tier": {
-            str(t): {s_: (sum(r["overall_score"] for r in recs) / len(recs) if recs else 0.0)
-                     for s_, recs in sys_map.items()}
+            str(t): {
+                s_: (
+                    sum(r["overall_score"] for r in recs
+                        if not str(r.get("rationale", "")).startswith("Fallback due to judge failure:"))
+                    / sum(1 for r in recs
+                          if not str(r.get("rationale", "")).startswith("Fallback due to judge failure:"))
+                    if any(not str(r.get("rationale", "")).startswith("Fallback due to judge failure:")
+                           for r in recs) else None
+                )
+                for s_, recs in sys_map.items()
+            }
             for t, sys_map in records["scoring_by_tier"].items()
         },
         "scoring_based_assessment_by_source": scores_by_source,
