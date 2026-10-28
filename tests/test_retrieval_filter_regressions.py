@@ -105,3 +105,27 @@ def test_filter_type_annotations_resolve_without_optional_torch_import():
     hints = get_type_hints(StatisticalFilter.compute_threshold)
     assert "scores" in hints
     assert hints["scores"] is np.ndarray
+
+
+
+def test_filter_rejects_non_1d_score_arrays():
+    with pytest.raises(ValueError, match="1-D score array"):
+        StatisticalFilter().filter_contexts(
+            [{"document": "one", "metadata": {}}],
+            np.array([[0.2]]),
+        )
+
+
+def test_filter_checks_empty_context_score_consistency():
+    with pytest.raises(ValueError, match="Mismatch"):
+        StatisticalFilter().filter_contexts([], np.array([0.2]))
+
+
+@pytest.mark.parametrize("top_k", [-1, 1.5, True])
+def test_filter_rejects_invalid_top_k(top_k):
+    with pytest.raises(ValueError, match="max_top_k"):
+        StatisticalFilter().filter_contexts(
+            [{"document": "one", "metadata": {}}],
+            np.array([0.2]),
+            max_top_k=top_k,
+        )
