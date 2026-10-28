@@ -57,3 +57,43 @@ def test_documented_go_gate_requires_both_recall_and_ndcg_targets(monkeypatch):
 def test_retrieval_calibration_refuses_test_pool():
     with pytest.raises(ValueError, match="development-only"):
         dev_pool_retrieval.run_retrieval_eval(pool="test")
+
+
+
+@pytest.mark.parametrize("bad_score", [np.nan, np.inf, -np.inf])
+def test_filter_rejects_non_finite_scores(bad_score):
+    filt = StatisticalFilter()
+    with pytest.raises(ValueError, match="Non-finite scores"):
+        filt.filter_contexts(
+            [{"document": "invalid", "metadata": {}}],
+            np.array([bad_score]),
+        )
+
+
+def test_filter_rejects_mismatched_context_and_score_lengths():
+    with pytest.raises(ValueError, match="Mismatch"):
+        StatisticalFilter().filter_contexts(
+            [{"document": "one", "metadata": {}}],
+            np.array([0.2, 0.3]),
+        )
+
+
+def test_environment_cannot_weaken_preregistered_go_gate(monkeypatch):
+    monkeypatch.setenv("HCAD_GO_DELTA_RECALL", "-0.10")
+    monkeypatch.setenv("HCAD_GO_DELTA_NDCG", "0.00")
+    with pytest.raises(ValueError, match="weakens the pre-registered minimum"):
+        importlib.reload(dev_pool_retrieval)
+    monkeypatch.delenv("HCAD_GO_DELTA_RECALL", raising=False)
+    monkeypatch.delenv("HCAD_GO_DELTA_NDCG", raising=False)
+    importlib.reload(dev_pool_retrieval)
+
+
+def test_environment_can_only_tighten_preregistered_go_gate(monkeypatch):
+    monkeypatch.setenv("HCAD_GO_DELTA_RECALL", "0.10")
+    monkeypatch.setenv("HCAD_GO_DELTA_NDCG", "0.08")
+    module = importlib.reload(dev_pool_retrieval)
+    assert module.GO_DELTA_RECALL == pytest.approx(0.10)
+    assert module.GO_DELTA_NDCG == pytest.approx(0.08)
+    monkeypatch.delenv("HCAD_GO_DELTA_RECALL", raising=False)
+    monkeypatch.delenv("HCAD_GO_DELTA_NDCG", raising=False)
+    importlib.reload(dev_pool_retrieval)
