@@ -1048,6 +1048,9 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
             "random_seed": RANDOM_SEED,
             "question_pool": question_pool,
             "question_set_id": question_set_id,
+            "integrity_manifest": str(manifest_path),
+            "integrity_index": integrity_manifest["index"],
+            "judge_coverage": judge_coverage,
             # Gate-mode provenance: comparable only within one mode.
             "gate_mode": gate_mode,
             # Learned vs static query-adaptive tensor (ablation runs set
