@@ -170,7 +170,7 @@ def _budget_evidence_contexts(
             remaining -= len(words)
             continue
         import re
-        sentences = re.split(r"(?<=[.!?])\\s+", document)
+        sentences = re.split(r"(?<=[.!?])\s+", document)
         kept: List[str] = []
         for sentence in sentences:
             sentence = sentence.strip()
