@@ -225,6 +225,11 @@ def _evaluate_config(
 ) -> Dict[str, Any]:
     """Run HCAD retrieval over the pool under one configuration."""
     ndcgs, recalls, gold_scores = [], [], []
+    candidate_pool_sizes = []
+    candidate_gold_hits = []
+    phi_top5_gold_hits = []
+    raw_score_top5_gold_hits = []
+    candidate_source_counts: Dict[str, int] = {}
     n_query_missing_rel = n_query_missing_mod = 0
     n_cand_missing_rel = n_cand_missing_mod = n_candidates = 0
 
@@ -244,11 +249,27 @@ def _evaluate_config(
             p_q = getattr(hcad_rag, "_last_query_presence", None)
             p_c = getattr(hcad_rag, "_last_candidate_presence", None)
 
-            if pool and phi is not None and len(phi) == len(pool):
+            if pool:
+                candidate_pool_sizes.append(len(pool))
+                for ctx in pool:
+                    source = str(ctx.get("source", "unknown"))
+                    candidate_source_counts[source] = candidate_source_counts.get(source, 0) + 1
                 pool_rel = _ranked_relevance(reference, pool)
-                gold_idx = [i for i, r in enumerate(pool_rel) if r == 1]
-                if gold_idx:
-                    gold_scores.append(float(np.max([phi[i] for i in gold_idx])))
+                gold_idx = [i for i, r in enumerate(pool_rel) if r > 0]
+                candidate_gold_hits.append(bool(gold_idx))
+                if phi is not None and len(phi) == len(pool):
+                    if gold_idx:
+                        gold_scores.append(float(np.max([phi[i] for i in gold_idx])))
+                    phi_order = np.argsort(np.asarray(phi, dtype=float))[::-1][:RETRIEVAL_K]
+                    phi_top5_gold_hits.append(any(i in gold_idx for i in phi_order))
+                # Raw candidate score is the retrieval-stage score (e.g. vector
+                # cosine for vector candidates); this diagnostic is deliberately
+                # separate from the decoupled Phi ranking used downstream.
+                raw_scores = np.asarray([
+                    float(ctx.get("score", float("-inf"))) for ctx in pool
+                ], dtype=float)
+                raw_order = np.argsort(raw_scores)[::-1][:RETRIEVAL_K]
+                raw_score_top5_gold_hits.append(any(i in gold_idx for i in raw_order))
 
             if p_q is not None:
                 p_q = np.asarray(p_q).ravel()
@@ -266,6 +287,17 @@ def _evaluate_config(
         "num_samples": n,
         "mean_ndcg_at_k": round(float(np.mean(ndcgs)), 4) if n else 0.0,
         "mean_recall_at_k": round(float(np.mean(recalls)), 4) if n else 0.0,
+        "candidate_survival_diagnostics": {
+            "mean_candidate_pool_size": round(float(np.mean(candidate_pool_sizes)), 2)
+            if candidate_pool_sizes else 0.0,
+            "gold_present_in_candidate_pool_frac": round(float(np.mean(candidate_gold_hits)), 4)
+            if candidate_gold_hits else None,
+            "gold_in_phi_top_k_frac": round(float(np.mean(phi_top5_gold_hits)), 4)
+            if phi_top5_gold_hits else None,
+            "gold_in_raw_score_top_k_frac": round(float(np.mean(raw_score_top5_gold_hits)), 4)
+            if raw_score_top5_gold_hits else None,
+            "candidate_source_counts": dict(sorted(candidate_source_counts.items())),
+        },
         "gold_score_percentiles": {
             "p25": round(float(np.percentile(gold_scores, TAU_SAT_PERCENTILE)), 4)
             if gold_scores else None,
