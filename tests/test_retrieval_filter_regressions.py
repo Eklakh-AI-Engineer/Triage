@@ -1,5 +1,7 @@
 """Regression tests for adaptive retrieval filtering and evaluation gates."""
 
+import importlib
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,7 @@ from src.core.statistical_filter import StatisticalFilter
 from src.evaluation import dev_pool_retrieval
 
 
-def test_filter_keeps_best_candidate_when_adaptive_threshold_exceeds_max():
+def test_filter_keeps_best_candidate_when_adaptive_threshold_exceeds_max(monkeypatch):
     filt = StatisticalFilter(k=2.0)
     contexts = [
         {"document": "weak", "metadata": {}},
@@ -17,7 +19,10 @@ def test_filter_keeps_best_candidate_when_adaptive_threshold_exceeds_max():
 
     # For this pool mu + 2*sigma exceeds max(score); the old implementation
     # rejected both candidates despite both being above the absolute floor.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("HCAD_TAU_SAT", raising=False)
     threshold, _, _ = filt.compute_threshold(scores, k=2.0, tau_sat=None)
+    monkeypatch.undo()
     assert threshold > scores.max()
 
     kept = filt.filter_contexts(contexts, scores, k=2.0, min_score=0.10)
@@ -43,11 +48,12 @@ def test_filter_returns_empty_for_empty_input():
 def test_documented_go_gate_requires_both_recall_and_ndcg_targets(monkeypatch):
     monkeypatch.delenv("HCAD_GO_DELTA_RECALL", raising=False)
     monkeypatch.delenv("HCAD_GO_DELTA_NDCG", raising=False)
-    assert dev_pool_retrieval.GO_DELTA_RECALL == pytest.approx(0.08)
-    assert dev_pool_retrieval.GO_DELTA_NDCG == pytest.approx(0.06)
-    assert dev_pool_retrieval.meets_go_gate(0.08, 0.06)
-    assert not dev_pool_retrieval.meets_go_gate(0.20, 0.059)
-    assert not dev_pool_retrieval.meets_go_gate(0.079, 0.20)
+    module = importlib.reload(dev_pool_retrieval)
+    assert module.GO_DELTA_RECALL == pytest.approx(0.08)
+    assert module.GO_DELTA_NDCG == pytest.approx(0.06)
+    assert module.meets_go_gate(0.08, 0.06)
+    assert not module.meets_go_gate(0.20, 0.059)
+    assert not module.meets_go_gate(0.079, 0.20)
 
 
 def test_retrieval_calibration_refuses_test_pool():
