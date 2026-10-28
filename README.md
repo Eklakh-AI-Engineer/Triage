@@ -11,7 +11,7 @@ A novel Retrieval-Augmented Generation framework that decomposes clinical semant
 2. **Anisotropic Transformation**: Computes a topology-aware transformation matrix $W_A$ to weight clinical embedding dimensions based on knowledge graph properties (node degree, relation confidence, IDF).
 3. **Adaptive Heaviside Filtering**: Replaces rigid Top-K retrieval with a dual-gated dynamic threshold:
    $$\mathcal{M}_{\text{HCAD}}(t_i) = \Theta(\Phi_{\text{Final}}(t_i) - (\mu + k\sigma))$$
-4. **JEV System One Decision Gate**: Employs an intelligent decision gate (`typesafe-sdk`) to evaluate factual groundedness and prune irrelevant or ungrounded context before prompt assembly, preventing token bloat and hallucination injection.
+4. **JEV System One Decision Gate**: Employs an intelligent decision gate (`typesafe-sdk`) to evaluate factual groundedness and prune irrelevant or ungrounded context before prompt assembly.
 5. **Bidirectional Hypergraph Expansion**: Discovers high-order biomedical relations and therapy associations from PrimeKG using multi-hop neighborhood hyperedges.
 
 ---
@@ -45,151 +45,109 @@ Semantic Decoupling (3×768 Matrix)    Candidate Context Pool
        Structured Clinical Prompt Construction
                          │
                          ▼
-       Clinical LLM (Llama-3.1-8B-Instruct) ──► Verified Clinical Synthesis
+       Clinical LLM ──► Response Synthesis
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Prerequisites & Environment Setup
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/Nirajd071/HCAD-RAG.git
-cd HCAD-RAG
+git clone https://github.com/Eklakh-AI-Engineer/Triage.git
+cd Triage
+```
 
-# Create and activate virtual environment
+### 2. Create and activate a virtual environment
+
+```bash
 python -m venv .venv
-source .venv/bin/activate
 
-# Install dependencies
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+```
+
+### 3. Install dependencies
+
+```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 # Install SciSpacy biomedical NER models
-# (--no-deps: their metadata pins spacy<3.8 but they run fine under 3.8)
 pip install --no-deps https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
 pip install --no-deps https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
 ```
 
-Use the repository-root `.env` as the single local environment file — copy
-`.env.example` and keep one profile:
+### 4. Configure environment
 
-- **Profile A (all LLMs local via ollama, zero LLM API keys):**
-  `LLM_PROVIDER=ollama` + `JUDGE_OLLAMA_MODEL=qwen2.5:14b`. Generator
-  (`llama3.1:8b`) and judge both run via ollama. Everything else keeps its
-  existing behavior — W&B stays online if `WANDB_API_KEY` is set, the JEV
-  gate stays live if `TYPESAFE_API_KEY` is set.
-- **Profile B (cloud-judge upgrade, opt-in):** `JUDGE_PROVIDER=huggingface`
-  puts the judge on paper-parity `Qwen/Qwen2.5-72B-Instruct` via HF Inference
-  Providers while the generator stays local.
+Copy `.env.example` to `.env` and configure the provider settings you use. Do not commit API keys or secrets.
+
+- **Local generation with Ollama:** set `LLM_PROVIDER=ollama`; ensure Ollama is installed and the configured models are available.
+- **Optional experiment tracking:** configure Weights & Biases only if desired.
+- **Optional remote decision gate / judge:** configure the required credentials explicitly and document the active mode for each experiment.
+
+### 5. Prepare the knowledge corpus and indices
 
 ```bash
-LLM_PROVIDER="huggingface"                              # "huggingface", "nvidia" (NIM), or "ollama"
-# JUDGE_PROVIDER="huggingface"                          # Optional hybrid: generator local (ollama),
-                                                        # judge remote (huggingface = Qwen2.5-72B, or nvidia)
-WANDB_API_KEY="your_rotated_wandb_api_key"              # Optional, enables experiment tracking
-WANDB_PROJECT="hcad-rag"
-# WANDB_ENTITY="your_wandb_username_or_team"            # Optional
-```
-
-The root `.env` is git-ignored and is loaded centrally by `src.config`; add
-settings there rather than creating another environment file. The W&B API key
-is loaded automatically for each evaluation, benchmark, hallucination
-evaluation, and weight-learning run. Do not put API keys in source code or
-commit them. Set `WANDB_MODE="disabled"` (or pass `--no-wandb`) to turn
-tracking off.
-
-### 2. Prepare Knowledge Corpus & Indices
-
-```bash
-# Build knowledge graph indices and vector database with clinical relations
 python src/main.py prepare --rebuild
 ```
 
-### 3. Run Benchmark (Base Paper Protocol)
-
-Replicate the evaluation protocol from Hyper-RAG ([arXiv:2504.08758](https://arxiv.org/abs/2504.08758)):
+### 6. Run a smoke test and benchmark
 
 ```bash
-# Run base paper benchmark comparing Baseline LLM, Vanilla RAG, and HCAD-RAG
-python src/evaluation/run_base_paper_benchmark.py 4
+python src/main.py demo
+python src/main.py benchmark --samples 50
 ```
 
-Outputs:
-- **5-Dimension Scoring Assessment** (0–100 scale: Comprehensiveness, Diversity, Empowerment, Logical, Readability)
-- **8-Criteria Selection Assessment** (Pairwise Win-Rate with order counterbalancing)
-- **Retrieval Latency Profiling**
-- **Retrieval Quality** (`src/evaluation/metrics.py`): NDCG@5 / Recall@5 over the paper-protocol gold relevance labels — the source chunk that generated each question
-- **Significance Testing**: exact McNemar test on paired per-question correctness (overall score ≥ 70 of 100 counts as correct)
-- **Citation Precision**: fraction of `[Evidence i]` tags in generated answers that resolve to actually retrieved items
-- **MedHallu hallucination evaluation** via `src/evaluation/hallucination_evaluator.py`
+Use the exact command options supported by `python src/main.py --help` for the current checkout. Large corpus preparation and full benchmarks can require substantial memory, disk space, GPU time, and model downloads.
 
-Per-question results are checkpointed to `results/base_paper_checkpoint.jsonl`
-and all aggregates are recomputed from the checkpoint, so interrupted runs
-resume without losing or double-counting samples. W&B logs the aggregate and
-per-question numeric metrics when `WANDB_API_KEY` is configured.
+---
 
-Weight learning tunes only `filter_k`, the learned parameter currently consumed by
-the retriever. Anisotropic and component-scoring weights remain at their configured
-values; retrieval and model architecture are unchanged.
+## Evaluation
 
-### Hybrid judging (small-GPU machines)
+The repository includes a benchmark comparing:
 
-`JUDGE_PROVIDER` decouples the judge from the generator. With
-`LLM_PROVIDER=ollama` (local `llama3.1:8b` via ollama) plus
-`JUDGE_PROVIDER=huggingface`, the judge runs on the paper-parity
-`Qwen/Qwen2.5-72B-Instruct` through Hugging Face Inference Providers
-(pay-per-token, needs HF billing; roughly $2 for a 50-sample run) while all
-generation stays free and local. `JUDGE_PROVIDER=nvidia` does the same via
-NVIDIA NIM. Without the variable, the judge follows `LLM_PROVIDER`.
+1. Baseline LLM without retrieval
+2. Vanilla dense vector RAG
+3. HCAD-RAG / TRIAGE
+
+Available evaluation code covers answer scoring, pairwise comparisons, retrieval quality, latency, citation-index validity, and MedHallu-related experiments. These metrics have different meanings and should not be interpreted interchangeably.
+
+**Research status:** benchmark artifacts under `results/quarantine_invalid_vectorstore_2026-10-20/` were explicitly quarantined because they were produced with an incomplete vector store. Do not cite those numbers as valid performance results. Rebuild the corpus and run a fresh, fully documented evaluation before reporting results.
+
+A reproducible run should record at least:
+
+- Repository commit and dependency/model versions
+- Dataset source, version, hashes, and indexed document counts
+- Question-set identifier, split and random seed
+- Generator, judge, prompts, and active gate mode
+- Per-question outputs, failed judge calls, fallbacks, abstentions and latency
+- Retrieval metrics and statistical analysis on a held-out test set
 
 ---
 
 ## Project Structure
 
 ```
-hcad-rag/
-├── requirements.txt                   # Project dependencies
-├── README.md                          # Documentation
-├── .gitignore                         # Git exclusion rules
-├── src/
-│   ├── config.py                      # Global configurations, model weights & paths
-│   ├── main.py                        # CLI entry point
-│   ├── wandb_tracking.py              # Shared W&B helpers (auto-enabled when configured)
-│   ├── api/
-│   │   └── server.py                   # FastAPI workbench API (`python src/main.py serve`)
-│   ├── data/
-│   │   ├── download_datasets.py       # Dataset fetchers (PrimeKG, MedHallu)
-│   │   ├── build_knowledge_graph.py   # PrimeKG MultiDiGraph & index construction
-│   │   └── build_vector_store.py      # ChromaDB clinical context ingestion
-│   ├── core/
-│   │   ├── ner_extractor.py           # SciSpacy + Regex Biomedical NER
-│   │   ├── entity_linker.py           # SapBERT FAISS cosine entity resolution
-│   │   ├── relation_extractor.py      # Rule-based clinical predicate extraction
-│   │   ├── semantic_decoupler.py      # Innovation 1: Entity-Relation-Modifier decoupling
-│   │   ├── anisotropic_transformer.py # Innovation 2: Graph topology W_A transformation
-│   │   ├── hypergraph_builder.py      # Innovation 3: Bidirectional hyperedge expansion
-│   │   ├── fact_hypergraph.py         # N-ary clinical fact hypergraph from PrimeKG shared-tail contexts
-│   │   ├── statistical_filter.py      # Innovation 4: Adaptive Heaviside cutoff
-│   │   ├── decision_gate.py           # Innovation 5: JEV System One groundedness gate
-│   │   ├── dynamic_tensor.py          # (P3, opt-in) trainable anisotropic tensor
-│   │   ├── entropy_gate.py            # (P3, opt-in) entropy-based abstention gate
-│   │   ├── weight_learner.py          # filter_k weight learning
-│   │   ├── prompt_builder.py          # Standardized 4-section clinical prompt builder
-│   │   ├── llm_client.py              # Unified LLM interface (HuggingFace / NVIDIA NIM / Ollama)
-│   │   └── hcad_retriever.py          # End-to-end integrated HCAD-RAG pipeline
-│   ├── baselines/
-│   │   ├── baseline_llm.py            # Parametric LLM baseline (zero-retrieval)
-│   │   └── vanilla_vector_rag.py      # Standard dense Top-K vector baseline
-│   └── evaluation/
-│       ├── base_paper_evaluator.py    # Scoring & selection rubric evaluator (LLM-as-a-judge)
-│       ├── run_base_paper_benchmark.py# Base paper benchmark runner (checkpointed, resume-safe)
-│       ├── hallucination_evaluator.py # MedHallu hallucination evaluation
-│       ├── metrics.py                 # NDCG@K, Recall@K, McNemar, citation precision
-│       └── plots.py                   # Benchmark figures rendered from results JSON
-└── results/
-    ├── figures/                       # Benchmark charts
-    └── tables/                        # Summary metrics & logs
+Triage/
+├── requirements.txt
+├── README.md
+├── data/
+├── deploy/
+├── models/
+├── results/
+└── src/
+    ├── api/
+    ├── baselines/
+    ├── core/
+    ├── data/
+    ├── evaluation/
+    ├── main.py
+    └── wandb_tracking.py
 ```
 
 ---
@@ -198,9 +156,12 @@ hcad-rag/
 
 | Dataset | Source | Purpose |
 |---------|--------|---------|
-| [PrimeKG](https://doi.org/10.7910/DVN/IXA7BM) | Harvard Dataverse | Precision medicine knowledge graph (129K nodes, 4M+ edges) |
-| [MedHallu](https://huggingface.co/datasets/UTAustin-AIHealth/MedHallu) | HuggingFace | Medical hallucination detection dataset |
-| PMC Open Access | NCBI / PMC | Curated open-access clinical text corpus |
+| PrimeKG | [Harvard Dataverse](https://doi.org/10.7910/DVN/IXA7BM) | Biomedical knowledge graph |
+| MedHallu | [Hugging Face](https://huggingface.co/datasets/UTAustin-AIHealth/MedHallu) | Medical hallucination benchmark |
+| PMC Open Access | [NCBI / PMC](https://pmc.ncbi.nlm.nih.gov/) | Biomedical full-text corpus |
+| HCAD-RAG | [Kaggle dataset](https://www.kaggle.com/datasets/nirajd071/hcad-rag) | Project-associated dataset; inspect dataset card for exact contents and version |
+
+Review each dataset's licence and terms before redistribution.
 
 ---
 
@@ -215,4 +176,4 @@ hcad-rag/
 
 ## License
 
-Research and academic use only. Individual components are governed by their respective dataset and model licenses.
+Research and academic use only. Individual components are governed by their respective dataset and model licences.
