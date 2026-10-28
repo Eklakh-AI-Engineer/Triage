@@ -16,7 +16,7 @@ class StatisticalFilter:
         self.k = k
 
     def compute_threshold(
-        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None,
+        self, scores: np.ndarray, k: Optional[float] = None,
         tau_sat: Optional[float] = None,
     ) -> tuple[float, float, float]:
         """Compute adaptive threshold from similarity score distribution.
@@ -48,7 +48,7 @@ class StatisticalFilter:
         return threshold, mu, sigma
 
     def heaviside_filter(
-        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None,
+        self, scores: np.ndarray, k: Optional[float] = None,
         tau_sat: Optional[float] = None,
     ) -> np.ndarray:
         """Apply Heaviside step function: 1 if score >= threshold else 0."""
