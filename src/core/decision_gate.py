@@ -198,9 +198,12 @@ class DecisionGate:
         verified = bounded
 
         if not verified and candidates:
-            top_score = candidates[0].get("phi_final", candidates[0].get("score", 0.0))
-            if top_score >= self.min_relevance_score:
-                verified = candidates[:1]
+            top = candidates[0]
+            top_score = top.get("phi_final", top.get("score", 0.0))
+            top_doc = str(top.get("document") or "").strip()
+            # Never bypass sentence-safe budgeting in the fallback path.
+            if top_score >= self.min_relevance_score and len(top_doc.split()) <= self.token_budget_words:
+                verified = [top]
 
         logger.debug(
             "DecisionGate pruned %d candidates down to %d verified items.",
