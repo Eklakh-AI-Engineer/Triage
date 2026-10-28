@@ -10,11 +10,9 @@ scispacy>=0.6,<0.7
 faiss-cpu>=1.7.4
 transformers>=4.40,<5.0
 scikit-learn>=1.3
-# NOTE: numpy cannot be exact-pinned here - scispacy 0.6.2 declares
-# numpy<2.0, so the resolver would fail (ResolutionImpossible). The 2.x
-# force happens as a separate notebook install step; that step pins
-# numpy==2.5.4, the version every successful run used.
-numpy>=1.26
+# SciSpacy 0.6.x requires NumPy <2. Keep the full stack resolver-compatible
+# rather than force-upgrading NumPy in the Kaggle notebook after installation.
+numpy==1.26.4
 murmurhash==1.0.12  # exact pin: newer murmurhash returns unsigned
                      # 64-bit hashes that overflow the ssize_t keys in
                      # spacy 3.8.11's tokenizer specials (PreshMap) -
