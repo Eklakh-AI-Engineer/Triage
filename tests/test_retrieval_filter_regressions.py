@@ -19,10 +19,8 @@ def test_filter_keeps_best_candidate_when_adaptive_threshold_exceeds_max(monkeyp
 
     # For this pool mu + 2*sigma exceeds max(score); the old implementation
     # rejected both candidates despite both being above the absolute floor.
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.delenv("HCAD_TAU_SAT", raising=False)
     threshold, _, _ = filt.compute_threshold(scores, k=2.0, tau_sat=None)
-    monkeypatch.undo()
     assert threshold > scores.max()
 
     kept = filt.filter_contexts(contexts, scores, k=2.0, min_score=0.10)
