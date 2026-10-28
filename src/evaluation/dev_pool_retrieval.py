@@ -228,7 +228,7 @@ def _evaluate_config(
     candidate_pool_sizes = []
     candidate_gold_hits = []
     phi_top5_gold_hits = []
-    raw_score_top5_gold_hits = []
+    gold_candidate_source_counts: Dict[str, int] = {}
     candidate_source_counts: Dict[str, int] = {}
     n_query_missing_rel = n_query_missing_mod = 0
     n_cand_missing_rel = n_cand_missing_mod = n_candidates = 0
@@ -257,19 +257,16 @@ def _evaluate_config(
                 pool_rel = _ranked_relevance(reference, pool)
                 gold_idx = [i for i, r in enumerate(pool_rel) if r > 0]
                 candidate_gold_hits.append(bool(gold_idx))
+                for i in gold_idx:
+                    source = str(pool[i].get("source", "unknown"))
+                    gold_candidate_source_counts[source] = (
+                        gold_candidate_source_counts.get(source, 0) + 1
+                    )
                 if phi is not None and len(phi) == len(pool):
                     if gold_idx:
                         gold_scores.append(float(np.max([phi[i] for i in gold_idx])))
                     phi_order = np.argsort(np.asarray(phi, dtype=float))[::-1][:RETRIEVAL_K]
                     phi_top5_gold_hits.append(any(i in gold_idx for i in phi_order))
-                # Raw candidate score is the retrieval-stage score (e.g. vector
-                # cosine for vector candidates); this diagnostic is deliberately
-                # separate from the decoupled Phi ranking used downstream.
-                raw_scores = np.asarray([
-                    float(ctx.get("score", float("-inf"))) for ctx in pool
-                ], dtype=float)
-                raw_order = np.argsort(raw_scores)[::-1][:RETRIEVAL_K]
-                raw_score_top5_gold_hits.append(any(i in gold_idx for i in raw_order))
 
             if p_q is not None:
                 p_q = np.asarray(p_q).ravel()
@@ -294,8 +291,11 @@ def _evaluate_config(
             if candidate_gold_hits else None,
             "gold_in_phi_top_k_frac": round(float(np.mean(phi_top5_gold_hits)), 4)
             if phi_top5_gold_hits else None,
-            "gold_in_raw_score_top_k_frac": round(float(np.mean(raw_score_top5_gold_hits)), 4)
-            if raw_score_top5_gold_hits else None,
+            # Counts of gold-relevant candidates by source. Candidate-level
+            # "score" values are source-specific (e.g. graph importance vs.
+            # vector similarity), so comparing them in one raw-score top-k
+            # ranking would be misleading and is intentionally omitted.
+            "gold_candidate_source_counts": dict(sorted(gold_candidate_source_counts.items())),
             "candidate_source_counts": dict(sorted(candidate_source_counts.items())),
         },
         "gold_score_percentiles": {
