@@ -164,15 +164,12 @@ class DecisionGate:
         ordered = diverse + remaining
 
         # Keep the combined prompt evidence within the configured word budget.
-        # budgets and floors are now hard invariants -
-        # (a) the FIRST (highest-scoring) candidate is clipped at a sentence
-        #     boundary instead of being skipped entirely, so top evidence is
-        #     never displaced by smaller low-value items;
-        # (b) the fallback admits only candidates above the configured
-        #     relevance floor (was a hardcoded 0.15 below the 0.25 default).
+        # Budgets are enforced only at sentence boundaries. Never slice a
+        # sentence by word count: the final fragment can drop a negation,
+        # temporal qualifier, dose unit, or contraindication condition.
         bounded = []
         remaining_words = self.token_budget_words
-        for idx, candidate in enumerate(ordered):
+        for candidate in ordered:
             if len(bounded) >= self.max_evidence_items:
                 break
             doc = str(candidate.get("document") or "").strip()
@@ -180,10 +177,24 @@ class DecisionGate:
             if len(words) <= remaining_words:
                 bounded.append(candidate)
                 remaining_words -= len(words)
-            elif idx == 0 and words:
-                # clip the top candidate at the budget instead of dropping it
-                bounded.append({**candidate, "document": " ".join(words[: self.token_budget_words])})
-                remaining_words = 0
+                continue
+
+            # Keep only complete leading sentences that fit the remaining
+            # budget. If no complete sentence fits, omit this candidate.
+            import re
+            sentences = re.findall(r"[^.!?]+(?:[.!?]+|$)", doc)
+            kept_sentences = []
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                sentence_words = sentence.split()
+                if len(sentence_words) > remaining_words:
+                    break
+                kept_sentences.append(sentence)
+                remaining_words -= len(sentence_words)
+            if kept_sentences:
+                bounded.append({**candidate, "document": " ".join(kept_sentences)})
         verified = bounded
 
         if not verified and candidates:
