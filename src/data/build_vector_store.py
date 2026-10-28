@@ -213,9 +213,12 @@ def build_vector_store(
     # Persist a source-bound integrity manifest beside processed data. This
     # records the exact CSV bytes and observed index composition so benchmark
     # startup can reject stale or partial stores.
-    import hashlib
-    from src.evaluation.integrity import build_integrity_manifest, write_integrity_manifest
-    source_digest = hashlib.sha256(kg_csv_path.read_bytes()).hexdigest()
+    from src.evaluation.integrity import (
+        build_integrity_manifest,
+        sha256_file,
+        write_integrity_manifest,
+    )
+    source_digest = sha256_file(kg_csv_path)
     manifest = build_integrity_manifest(
         input_paths=[kg_csv_path],
         indexed_document_count=final_count,
