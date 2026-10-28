@@ -152,6 +152,39 @@ def _answer_segments(answer: str, n_evidence: int) -> List[Dict[str, Any]]:
         segments.append({"kind": "text", "value": answer[pos:]})
     return segments or [{"kind": "text", "value": answer}]
 
+def _budget_evidence_contexts(
+    contexts: List[Dict[str, Any]], word_budget: int
+) -> List[Dict[str, Any]]:
+    """Keep only complete evidence sentences within the request word budget.
+
+    If the next sentence does not fit, it is omitted rather than cut mid-sentence;
+    a context with no complete sentence that fits is omitted entirely.
+    """
+    bounded: List[Dict[str, Any]] = []
+    remaining = word_budget
+    for context in contexts:
+        document = _context_document(context).strip()
+        words = document.split()
+        if len(words) <= remaining:
+            bounded.append(context)
+            remaining -= len(words)
+            continue
+        import re
+        sentences = re.split(r"(?<=[.!?])\s+", document)
+        kept: List[str] = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            count = len(sentence.split())
+            if count > remaining:
+                break
+            kept.append(sentence)
+            remaining -= count
+        if kept:
+            bounded.append({**context, "document": " ".join(kept)})
+    return bounded
+
 def _gate_k_for(config: GateConfigIn) -> float:
     """Map the workbench tau slider to the Heaviside k.
 
@@ -191,11 +224,13 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
     query = request.query.strip()
 
     provider.total_queries += 1
+    request_started = time.perf_counter()
 
     try:
-        t0 = time.perf_counter()
-        hcad_contexts = hcad.retrieve(query, k=_gate_k_for(config))
-        latency_ms = (time.perf_counter() - t0) * 1000.0
+        retrieval_started = time.perf_counter()
+        retrieved_contexts = hcad.retrieve(query, k=_gate_k_for(config))
+        retrieval_latency_ms = (time.perf_counter() - retrieval_started) * 1000.0
+        hcad_contexts = _budget_evidence_contexts(retrieved_contexts, config.wordBudget)
 
         # Entities via the same NER the retriever uses.
         try:
@@ -243,8 +278,8 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "alpha": config.alphaDecoupling,
         }
 
-        # Gate: admitted contexts carry phi_final; JEV is their mean, entropy
-        # delta the negative score spread (judge-distribution proxy).
+        # Telemetry describes observed retrieval scores; score spread is not
+        # entropy and is never labelled as an entropy delta.
         phi = [float(c.get("phi_final", c.get("score", 0.0)) or 0.0)
                for c in hcad_contexts]
         jev = round(sum(phi) / len(phi), 4) if phi else 0.0
@@ -263,10 +298,14 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
         gate = {
             "decision": "PASS" if passed else "ABSTAIN",
             "jev": jev,
-            "entropyDelta": round(-spread, 4),
+            "scoreSpread": round(spread, 4),
+            "scoreSpreadDefinition": "max(phi_final or score) - min(phi_final or score); 0 when fewer than 2 contexts",
             "tauEntropy": config.tauEntropy,
+            "candidateCount": len(pool),
             "admittedCount": len(hcad_contexts),
-            "contextWords": min(config.wordBudget, context_words),
+            "contextWords": context_words,
+            "wordBudget": config.wordBudget,
+            "output": "ABSTAIN" if not hcad_contexts else "PASS",
             "groundedMode": grounded_mode,
         }
 
@@ -296,6 +335,7 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "warnings": warnings,
         }
 
+        end_to_end_latency_ms = round((time.perf_counter() - request_started) * 1000.0, 1)
         return {
             "queryId": f"api-{int(time.time() * 1000):x}",
             "query": query,
@@ -307,7 +347,10 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "arena": arena,
             "citations": citations,
             "abstentionRate": _session_abstention_rate(),
-            "latencyMs": round(latency_ms, 1),
+            "retrievalLatencyMs": round(retrieval_latency_ms, 1),
+            "endToEndLatencyMs": end_to_end_latency_ms,
+            # Backwards-compatible alias: latencyMs now means end-to-end latency.
+            "latencyMs": end_to_end_latency_ms,
             "substrate": {"name": "PrimeKG", "nodes": 129262, "edges": 4000956},
         }
     except Exception as exc:

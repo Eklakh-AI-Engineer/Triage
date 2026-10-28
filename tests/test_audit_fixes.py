@@ -92,18 +92,29 @@ def test_statistical_filter_numpy_and_floor():
     assert mask.tolist() == [1, 1]  # sigma->0 retains all (documented behavior)
 
 def test_decision_gate_budget_and_floor_invariants():
-    """Item 10: top evidence is clipped, not dropped; floor respected."""
+    """Evidence budgets must never truncate a sentence or a clinical qualifier."""
     from src.core.decision_gate import DecisionGate
     gate = DecisionGate(use_jev=False, min_relevance_score=0.25,
-                        max_evidence_items=8, token_budget_words=20)
-    long_doc = "word " * 60  # exceeds the budget
+                        max_evidence_items=8, token_budget_words=12)
+    long_doc = "word " * 60  # no complete sentence boundary within budget
     kept = gate.verify_and_prune_candidates(
         [{"document": long_doc, "metadata": {"head_name": "A", "relation": "TREATS",
                                               "tail_name": "B"}, "phi_final": 0.9}],
         "q",
     )
-    assert len(kept) == 1, "top candidate must be clipped, not dropped"
-    assert len(kept[0]["document"].split()) <= 20
+    assert kept == [], "unbounded sentence must be omitted, not fragment-truncated"
+
+    qualifier_doc = (
+        "Metformin is contraindicated in severe renal failure. "
+        "It must not be used during this condition."
+    )
+    kept = gate.verify_and_prune_candidates(
+        [{"document": qualifier_doc, "metadata": {}, "phi_final": 0.9}], "q"
+    )
+    assert len(kept) == 1
+    assert kept[0]["document"] == "Metformin is contraindicated in severe renal failure."
+    assert kept[0]["document"].endswith(".")
+    assert "contraindicated" in kept[0]["document"]
 
     below = gate.verify_and_prune_candidates(
         [{"document": "tiny doc", "metadata": {}, "phi_final": 0.2}], "q")

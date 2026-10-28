@@ -118,9 +118,14 @@ def test_query_pass_with_citation_segments(client):
     assert body["gate"]["decision"] == "PASS"
     assert body["gate"]["admittedCount"] == 2
     assert body["gate"]["jev"] == pytest.approx(0.75, abs=1e-6)
-    assert body["gate"]["entropyDelta"] == pytest.approx(-0.1, abs=1e-6)
+    assert body["gate"]["scoreSpread"] == pytest.approx(0.1, abs=1e-6)
+    assert body["gate"]["output"] == "PASS"
+    assert body["gate"]["candidateCount"] == 2
+    assert body["gate"]["scoreSpreadDefinition"].startswith("max(phi_final")
     assert body["abstentionRate"] == 0.0
-    assert body["latencyMs"] >= 0.0
+    assert body["retrievalLatencyMs"] >= 0.0
+    assert body["endToEndLatencyMs"] >= body["retrievalLatencyMs"]
+    assert body["latencyMs"] == body["endToEndLatencyMs"]
 
     # P2d: grounded-mode provenance - evidence-backed answers are grounded.
     assert body["groundedMode"] == "grounded"
@@ -281,3 +286,21 @@ def test_triage_query_error_sanitization():
     assert res.json()["detail"] == "Internal pipeline processing error"
     assert "password123" not in res.text
 
+
+
+def test_api_evidence_budget_keeps_complete_sentences_and_qualifiers():
+    contexts = [
+        {"document": "Metformin is contraindicated in severe renal failure. "
+                     "It must not be used in this condition.", "metadata": {}},
+    ]
+    bounded = server._budget_evidence_contexts(contexts, word_budget=9)
+    assert len(bounded) == 1
+    assert bounded[0]["document"] == "Metformin is contraindicated in severe renal failure."
+    assert bounded[0]["document"].endswith(".")
+    assert "contraindicated" in bounded[0]["document"]
+    assert "contraindicated in severe renal failure" in bounded[0]["document"]
+
+
+def test_api_evidence_budget_drops_oversized_unterminated_fragment():
+    contexts = [{"document": " ".join(["clinical"] * 150), "metadata": {}}]
+    assert server._budget_evidence_contexts(contexts, word_budget=10) == []

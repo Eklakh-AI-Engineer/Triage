@@ -149,6 +149,9 @@ class HallucinationEvaluator:
             level: {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
             for level in self.DIFFICULTY_LEVELS + ["all"]
         }
+        generated_answer_predictions: dict[str, list[bool]] = {
+            level: [] for level in self.DIFFICULTY_LEVELS + ["all"]
+        }
 
         def classify(question: str, answer: str, knowledge: str, sample_index: int) -> bool:
             messages = builder.build_hallucination_prompt(question, answer, knowledge)
@@ -212,12 +215,10 @@ class HallucinationEvaluator:
                         f"System returned an empty answer for MedHallu sample {sample_index}"
                     )
                 predicted_hallu = classify(question, generated, knowledge, sample_index)
+                # This is a model verdict, NOT an independently labelled target.
+                # Store it as a descriptive count only; never call it TP/TN.
                 for level_key in ("all", difficulty):
-                    counts = results_by_difficulty[level_key]
-                    if predicted_hallu:
-                        counts["tp"] += 1     # system hallucinated (detected)
-                    else:
-                        counts["tn"] += 1     # system answer judged faithful
+                    generated_answer_predictions[level_key].append(predicted_hallu)
             else:
                 candidates = (
                     (str(gt_answer), False),
@@ -238,7 +239,39 @@ class HallucinationEvaluator:
                         else:
                             counts["fn"] += 1
 
-        # Compute classification metrics for each difficulty.
+        if eval_mode == "system_answers":
+            # No independent claim-level gold labels exist in this path. Returning
+            # confusion-matrix metrics here would invent ground truth by treating
+            # the judge's verdict as the answer's actual factuality.
+            output = {
+                "system": system_name,
+                "evaluation_mode": "system_answers",
+                "task": "generated_answer_classifier_verdicts",
+                "num_samples": len(data),
+                "num_classifications": len(data),
+                "classifier_model": model_name,
+                "metrics_available": False,
+                "reason": (
+                    "Precision/recall/F1 are not reported because generated answers "
+                    "lack independent claim-level factuality labels. Use "
+                    "src.evaluation.claim_factuality with independently annotated claims."
+                ),
+                "verdict_counts": {
+                    level: {
+                        "flagged_hallucinated": sum(predictions),
+                        "flagged_faithful": len(predictions) - sum(predictions),
+                        "n": len(predictions),
+                    }
+                    for level, predictions in generated_answer_predictions.items()
+                },
+            }
+            out_path = TABLES_DIR / f"hallucination_{system_name.replace(' ','_').lower()}.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(output, f, indent=2)
+            return output
+
+        # Detector-mode confusion matrix uses the dataset's paired known labels.
         def _f1_from_counts(counts: dict) -> dict:
             tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
             prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0

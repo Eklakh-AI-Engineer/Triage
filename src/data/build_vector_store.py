@@ -205,9 +205,34 @@ def build_vector_store(
     if had_live:
         shutil.rmtree(backup_dir, ignore_errors=True)
     final = chromadb.PersistentClient(path=str(VECTORDB_DIR)).get_collection(CHROMA_COLLECTION_NAME)
+    final_count = final.count()
     logger.info(
-        f"Published vector store '{CHROMA_COLLECTION_NAME}' with {final.count():,} documents"
+        f"Published vector store '{CHROMA_COLLECTION_NAME}' with {final_count:,} documents"
     )
+
+    # Persist a source-bound integrity manifest beside processed data. This
+    # records the exact CSV bytes and observed index composition so benchmark
+    # startup can reject stale or partial stores.
+    from src.evaluation.integrity import (
+        build_integrity_manifest,
+        sha256_file,
+        write_integrity_manifest,
+    )
+    source_digest = sha256_file(kg_csv_path)
+    manifest = build_integrity_manifest(
+        input_paths=[kg_csv_path],
+        indexed_document_count=final_count,
+        expected_document_count=len(df),
+        relation_counts={str(k): int(v) for k, v in df["relation"].value_counts().items()},
+        corpus_composition={"primekg_relation_triples": final_count},
+        embedding_model=EMBEDDING_MODEL_NAME,
+        index_name=CHROMA_COLLECTION_NAME,
+        index_version=f"chroma-{final_count}-{source_digest[:12]}",
+        build_version="triage-vector-store-v1",
+    )
+    manifest_path = PROCESSED_DATA_DIR / "integrity_manifest.json"
+    write_integrity_manifest(manifest, manifest_path)
+    logger.info("Wrote vector-store integrity manifest to %s", manifest_path)
     return final
 
 def load_vector_store() -> chromadb.Collection:
