@@ -89,17 +89,27 @@ class StatisticalFilter:
         gate1_contexts = [ctx for ctx, keep in zip(contexts, above_floor) if keep]
         gate1_scores = scores[above_floor]
 
-        # Gate 2: relative Heaviside threshold on survivors
-        mask = self.heaviside_filter(gate1_scores, k=k)
+        # Gate 2: relative Heaviside threshold on survivors. Bound the
+        # threshold by the best eligible score: mu + k*sigma can exceed
+        # max(scores) for skewed/small pools, which otherwise rejects every
+        # candidate even though at least one passed Gate 1. This is not a
+        # forced admission of low-quality evidence: Gate 1 remains mandatory.
+        threshold, mu, sigma = self.compute_threshold(gate1_scores, k=k)
+        threshold = min(threshold, float(np.max(gate1_scores)))
+        mask = gate1_scores >= threshold
         filtered = [
             {**ctx, score_key: float(gate1_scores[i])}
             for i, ctx in enumerate(gate1_contexts)
-            if mask[i] == 1
+            if mask[i]
         ]
 
-        if not filtered:
-            logger.info("All candidates fell below Heaviside threshold; returning empty.")
-            return []
+        logger.debug(
+            "Dual gate: input=%d above_floor=%d kept=%d min=%.4f "
+            "max=%.4f mean=%.4f std=%.4f threshold=%.4f",
+            len(contexts), len(gate1_contexts), len(filtered),
+            float(np.min(gate1_scores)), float(np.max(gate1_scores)),
+            mu, sigma, threshold,
+        )
 
         filtered.sort(key=lambda c: c[score_key], reverse=True)
         if max_top_k is not None:
