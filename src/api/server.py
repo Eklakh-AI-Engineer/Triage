@@ -152,6 +152,39 @@ def _answer_segments(answer: str, n_evidence: int) -> List[Dict[str, Any]]:
         segments.append({"kind": "text", "value": answer[pos:]})
     return segments or [{"kind": "text", "value": answer}]
 
+def _budget_evidence_contexts(
+    contexts: List[Dict[str, Any]], word_budget: int
+) -> List[Dict[str, Any]]:
+    """Keep only complete evidence sentences within the request word budget.
+
+    If the next sentence does not fit, it is omitted rather than cut mid-sentence;
+    a context with no complete sentence that fits is omitted entirely.
+    """
+    bounded: List[Dict[str, Any]] = []
+    remaining = word_budget
+    for context in contexts:
+        document = _context_document(context).strip()
+        words = document.split()
+        if len(words) <= remaining:
+            bounded.append(context)
+            remaining -= len(words)
+            continue
+        import re
+        sentences = re.split(r"(?<=[.!?])\\s+", document)
+        kept: List[str] = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            count = len(sentence.split())
+            if count > remaining:
+                break
+            kept.append(sentence)
+            remaining -= count
+        if kept:
+            bounded.append({**context, "document": " ".join(kept)})
+    return bounded
+
 def _gate_k_for(config: GateConfigIn) -> float:
     """Map the workbench tau slider to the Heaviside k.
 
@@ -195,8 +228,9 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
 
     try:
         retrieval_started = time.perf_counter()
-        hcad_contexts = hcad.retrieve(query, k=_gate_k_for(config))
+        retrieved_contexts = hcad.retrieve(query, k=_gate_k_for(config))
         retrieval_latency_ms = (time.perf_counter() - retrieval_started) * 1000.0
+        hcad_contexts = _budget_evidence_contexts(retrieved_contexts, config.wordBudget)
 
         # Entities via the same NER the retriever uses.
         try:
@@ -301,6 +335,7 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "warnings": warnings,
         }
 
+        end_to_end_latency_ms = round((time.perf_counter() - request_started) * 1000.0, 1)
         return {
             "queryId": f"api-{int(time.time() * 1000):x}",
             "query": query,
@@ -313,9 +348,9 @@ def triage_query(request: TriageQueryRequest) -> Dict[str, Any]:
             "citations": citations,
             "abstentionRate": _session_abstention_rate(),
             "retrievalLatencyMs": round(retrieval_latency_ms, 1),
-            "endToEndLatencyMs": round((time.perf_counter() - request_started) * 1000.0, 1),
+            "endToEndLatencyMs": end_to_end_latency_ms,
             # Backwards-compatible alias: latencyMs now means end-to-end latency.
-            "latencyMs": round((time.perf_counter() - request_started) * 1000.0, 1),
+            "latencyMs": end_to_end_latency_ms,
             "substrate": {"name": "PrimeKG", "nodes": 129262, "edges": 4000956},
         }
     except Exception as exc:
