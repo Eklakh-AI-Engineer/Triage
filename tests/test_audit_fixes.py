@@ -95,7 +95,7 @@ def test_decision_gate_budget_and_floor_invariants():
     """Evidence budgets must never truncate a sentence or a clinical qualifier."""
     from src.core.decision_gate import DecisionGate
     gate = DecisionGate(use_jev=False, min_relevance_score=0.25,
-                        max_evidence_items=8, token_budget_words=20)
+                        max_evidence_items=8, token_budget_words=12)
     long_doc = "word " * 60  # no complete sentence boundary within budget
     kept = gate.verify_and_prune_candidates(
         [{"document": long_doc, "metadata": {"head_name": "A", "relation": "TREATS",
