@@ -5,7 +5,7 @@ sentence-transformers>=2.7,<4.0
 # model configs ('True' string where a bool is expected), silently dropping
 # scispacy NER to regex fallback. 3.8.11 + thinc 8.3.11 load them (verified).
 spacy==3.8.11
-thinc==8.3.11  # numpy 2.x ABI compatible build required
+thinc==8.3.11  # paired with spaCy 3.8.11; NumPy is pinned below
 scispacy>=0.6,<0.7
 faiss-cpu>=1.7.4
 transformers>=4.40,<5.0
