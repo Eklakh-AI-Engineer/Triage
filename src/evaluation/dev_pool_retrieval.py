@@ -41,8 +41,11 @@ from src.evaluation.run_base_paper_benchmark import (
 
 logger = logging.getLogger(__name__)
 
-GO_DELTA_RECALL = float(os.environ.get("HCAD_GO_DELTA_RECALL", "-0.10"))
-GO_DELTA_NDCG = float(os.environ.get("HCAD_GO_DELTA_NDCG", "0.00"))
+# Keep code defaults aligned with the documented acceptance criteria.
+# Overrides are allowed for explicitly approved experiments, not to silently
+# relax the release gate.
+GO_DELTA_RECALL = float(os.environ.get("HCAD_GO_DELTA_RECALL", "0.08"))
+GO_DELTA_NDCG = float(os.environ.get("HCAD_GO_DELTA_NDCG", "0.06"))
 
 # (name, env overrides). The baseline disables masking and vocab mapping and
 # pins the desc expansion rule so the paired comparison isolates exactly
@@ -316,7 +319,7 @@ def run_retrieval_eval(
             "recall_at_k": round(d_recall, 4),
             "ndcg_at_k": round(d_ndcg, 4),
         }
-        is_go = (d_recall >= GO_DELTA_RECALL and d_ndcg >= GO_DELTA_NDCG) or (d_ndcg >= 0.0)
+        is_go = d_recall >= GO_DELTA_RECALL and d_ndcg >= GO_DELTA_NDCG
         results["go_stop"] = {
             "required_delta_recall": GO_DELTA_RECALL,
             "required_delta_ndcg": GO_DELTA_NDCG,
