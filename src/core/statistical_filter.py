@@ -73,9 +73,15 @@ class StatisticalFilter:
         if not contexts:
             return []
 
-        scores = np.asarray(scores, dtype=float)
+        scores = np.asarray(scores, dtype=float).reshape(-1)
         if len(contexts) != len(scores):
             raise ValueError(f"Mismatch: {len(contexts)} contexts vs {len(scores)} scores")
+        if not np.isfinite(scores).all():
+            raise ValueError("Non-finite scores supplied to context filtering")
+        if not np.isfinite(min_score):
+            raise ValueError("min_score must be finite")
+        if max_top_k is not None and max_top_k < 0:
+            raise ValueError("max_top_k must be non-negative or None")
 
         # Gate 1: absolute quality floor
         above_floor = scores >= min_score
