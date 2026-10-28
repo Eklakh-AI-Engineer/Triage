@@ -43,10 +43,11 @@ def test_filter_returns_empty_for_empty_input():
 def test_documented_go_gate_requires_both_recall_and_ndcg_targets(monkeypatch):
     monkeypatch.delenv("HCAD_GO_DELTA_RECALL", raising=False)
     monkeypatch.delenv("HCAD_GO_DELTA_NDCG", raising=False)
-    # Constants are loaded at module import; verify the documented defaults
-    # independently from any developer-machine environment overrides.
     assert dev_pool_retrieval.GO_DELTA_RECALL == pytest.approx(0.08)
     assert dev_pool_retrieval.GO_DELTA_NDCG == pytest.approx(0.06)
+    assert dev_pool_retrieval.meets_go_gate(0.08, 0.06)
+    assert not dev_pool_retrieval.meets_go_gate(0.20, 0.059)
+    assert not dev_pool_retrieval.meets_go_gate(0.079, 0.20)
 
 
 def test_retrieval_calibration_refuses_test_pool():
