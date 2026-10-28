@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, random, time
 from pathlib import Path
 from typing import Any
-from src.config import RESULTS_DIR
+from src.config import EVIDENCE_WORD_BUDGET, RESULTS_DIR
 from src.evaluation.integrity import validate_integrity_manifest
 
 def _sha256(path: Path) -> str:
@@ -52,8 +52,14 @@ def run_controlled_benchmark(questions_path: str | Path, output_dir: str | Path 
         "triage_model": getattr(triage, "model_name", os.getenv("HCAD_MODEL", "configured-default")),
         "judge_model": os.getenv("JUDGE_HF_MODEL", "configured-default"),
         "temperature": os.getenv("LLM_TEMPERATURE", "configured-default"),
-        "context_budget_words": os.getenv("EVIDENCE_WORD_BUDGET", "config-default"),
+        "context_budget_words": EVIDENCE_WORD_BUDGET,
+        "retrieval_top_k": {"vanilla_rag": 5, "triage": 30},
         "gate_mode": gate_mode, "tensor_mode": os.getenv("HCAD_TENSOR_MODE", "static"),
+        "prompt_template_sha256": {
+            "baseline": _sha256(Path(__file__).resolve().parents[1] / "baselines" / "baseline_llm.py"),
+            "vanilla_rag": _sha256(Path(__file__).resolve().parents[1] / "baselines" / "vanilla_vector_rag.py"),
+            "triage": _sha256(Path(__file__).resolve().parents[1] / "core" / "prompt_builder.py"),
+        },
         "question_sha256": _sha256(questions_path), "integrity_manifest_sha256": _sha256(manifest_path),
         "question_count": len(questions), "seed": seed,
     }
@@ -90,6 +96,7 @@ def run_controlled_benchmark(questions_path: str | Path, output_dir: str | Path 
         e2e = [float(r["end_to_end_latency_ms"]) for r in success]
         systems_summary[name] = {"n_questions": len(rows), "n_success": len(success),
             "n_failures": len(rows) - len(success), "failure_rate": (len(rows)-len(success))/len(rows),
+            "failure_rate_ci95": _bootstrap_ci([1.0 if r["status"] != "ok" else 0.0 for r in rows], seed),
             "retrieval_latency_ms": _bootstrap_ci(retrieval, seed),
             "end_to_end_latency_ms": _bootstrap_ci(e2e, seed)}
     bundle = {"schema_version": 1, "experiment": "controlled_paired_three_system_benchmark",
