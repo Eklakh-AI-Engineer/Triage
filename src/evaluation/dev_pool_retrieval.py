@@ -77,6 +77,11 @@ def _env_overrides(overrides: Dict[str, Optional[str]]) -> Iterator[None]:
                 os.environ[key] = old
 
 
+def meets_go_gate(delta_recall: float, delta_ndcg: float) -> bool:
+    """Return whether both pre-registered development improvements are met."""
+    return delta_recall >= GO_DELTA_RECALL and delta_ndcg >= GO_DELTA_NDCG
+
+
 def _hub_anchor_fraction(hcad_rag, contexts: list, degree_cap: int) -> bool:
     """True when any retrieved context is anchored on a >cap-degree node.
 
@@ -262,6 +267,13 @@ def run_retrieval_eval(
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Paired before/after retrieval evaluation on the development pool."""
+
+    if pool != "dev":
+        raise ValueError(
+            "The retrieval calibration harness is development-only. "
+            "The held-out test pool must remain untouched until the frozen "
+            "configuration passes the documented GO gate."
+        )
     logger.info(
         "Deliverable-B dev-pool retrieval eval (n=%d, pool=%s, k=%d)",
         num_samples, pool, RETRIEVAL_K,
@@ -319,7 +331,7 @@ def run_retrieval_eval(
             "recall_at_k": round(d_recall, 4),
             "ndcg_at_k": round(d_ndcg, 4),
         }
-        is_go = d_recall >= GO_DELTA_RECALL and d_ndcg >= GO_DELTA_NDCG
+        is_go = meets_go_gate(d_recall, d_ndcg)
         results["go_stop"] = {
             "required_delta_recall": GO_DELTA_RECALL,
             "required_delta_ndcg": GO_DELTA_NDCG,
