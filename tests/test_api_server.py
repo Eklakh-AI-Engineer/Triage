@@ -118,9 +118,14 @@ def test_query_pass_with_citation_segments(client):
     assert body["gate"]["decision"] == "PASS"
     assert body["gate"]["admittedCount"] == 2
     assert body["gate"]["jev"] == pytest.approx(0.75, abs=1e-6)
-    assert body["gate"]["entropyDelta"] == pytest.approx(-0.1, abs=1e-6)
+    assert body["gate"]["scoreSpread"] == pytest.approx(0.1, abs=1e-6)
+    assert body["gate"]["output"] == "PASS"
+    assert body["gate"]["candidateCount"] == 2
+    assert body["gate"]["scoreSpreadDefinition"].startswith("max(phi_final")
     assert body["abstentionRate"] == 0.0
-    assert body["latencyMs"] >= 0.0
+    assert body["retrievalLatencyMs"] >= 0.0
+    assert body["endToEndLatencyMs"] >= body["retrievalLatencyMs"]
+    assert body["latencyMs"] == body["endToEndLatencyMs"]
 
     # P2d: grounded-mode provenance - evidence-backed answers are grounded.
     assert body["groundedMode"] == "grounded"
