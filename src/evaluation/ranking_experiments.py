@@ -27,7 +27,7 @@ from src.evaluation.run_base_paper_benchmark import (
 )
 
 RRF_K = 60
-STRATEGIES = ("dense_only", "graph_only", "rrf", "hcad")
+STRATEGIES = ("dense_only", "graph_only", "rrf", "hcad_phi", "hcad_final")
 
 
 def _text(candidate: dict[str, Any]) -> str:
@@ -103,7 +103,8 @@ def _rank_variants(
         "dense_only": dense,
         "graph_only": graph,
         "rrf": reciprocal_rank_fusion(candidates),
-        "hcad": hcad_ranked,
+        "hcad_phi": hcad_ranked,
+        "hcad_final": list(final_hcad),
     }
 
 
@@ -297,7 +298,7 @@ def run_ranking_experiments(
             for metric_idx, (metric, values) in enumerate(metrics.items())
         }
     deltas: dict[str, Any] = {}
-    for challenger in ("graph_only", "rrf", "hcad"):
+    for challenger in ("graph_only", "rrf", "hcad_phi", "hcad_final"):
         deltas[challenger] = {}
         for metric in ("recall_at_5", "ndcg_at_5", "mrr_at_5"):
             paired = [
