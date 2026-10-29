@@ -20,7 +20,6 @@ from typing import Any
 import numpy as np
 
 from src.config import MIN_PHI_SCORE, RESULTS_DIR
-from src.evaluation.metrics import ndcg_at_k, recall_at_k
 from src.evaluation.run_base_paper_benchmark import (
     RETRIEVAL_K,
     _ranked_relevance,
@@ -76,7 +75,11 @@ def reciprocal_rank_fusion(
     )
 
 
-def _rank_variants(candidates: list[dict[str, Any]], final_hcad: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _rank_variants(
+    candidates: list[dict[str, Any]],
+    final_hcad: list[dict[str, Any]],
+    phi_scores: np.ndarray,
+) -> dict[str, list[dict[str, Any]]]:
     dense = sorted(
         [c for c in candidates if c.get("source") == "vector"],
         key=lambda row: float(row.get("score") or 0.0),
@@ -87,12 +90,39 @@ def _rank_variants(candidates: list[dict[str, Any]], final_hcad: list[dict[str, 
         key=lambda row: float(row.get("score") or 0.0),
         reverse=True,
     )
+    hcad_ranked = [
+        candidate for _, candidate in sorted(
+            zip(phi_scores.tolist(), candidates),
+            key=lambda pair: float(pair[0]),
+            reverse=True,
+        )
+    ] if len(phi_scores) == len(candidates) else list(final_hcad)
     return {
-        "dense_only": dense[:RETRIEVAL_K],
-        "graph_only": graph[:RETRIEVAL_K],
-        "rrf": reciprocal_rank_fusion(candidates)[:RETRIEVAL_K],
-        "hcad": list(final_hcad)[:RETRIEVAL_K],
+        # Keep complete rankings so Recall@K/NDCG@K use the same candidate-pool
+        # relevance denominator for every strategy rather than a truncated top-K.
+        "dense_only": dense,
+        "graph_only": graph,
+        "rrf": reciprocal_rank_fusion(candidates),
+        "hcad": hcad_ranked,
     }
+
+
+def _metrics_for_ranking(
+    reference: str,
+    ranked_contexts: list[dict[str, Any]],
+    pool_relevance: list[int],
+    k: int = RETRIEVAL_K,
+) -> tuple[float, float, float]:
+    ranked_relevance = _ranked_relevance(reference, ranked_contexts)
+    total_relevant = sum(pool_relevance)
+    recall = sum(ranked_relevance[:k]) / total_relevant if total_relevant else 0.0
+    ideal = sorted(pool_relevance, reverse=True)[:k]
+    discounts = np.log2(np.arange(2, len(ideal) + 2))
+    idcg = float(np.sum(np.asarray(ideal, dtype=float) / discounts)) if ideal else 0.0
+    top = ranked_relevance[:k]
+    dcg = float(np.sum(np.asarray(top, dtype=float) / np.log2(np.arange(2, len(top) + 2)))) if top else 0.0
+    ndcg = dcg / idcg if idcg else 0.0
+    return float(recall), float(ndcg), _reciprocal_rank(ranked_relevance, k)
 
 
 def _reciprocal_rank(relevance: list[int], k: int = RETRIEVAL_K) -> float:
@@ -231,7 +261,7 @@ def run_ranking_experiments(
             sum(1 for score in phi if float(score) < MIN_PHI_SCORE)
         )
 
-        variants = _rank_variants(candidates, hcad_final)
+        variants = _rank_variants(candidates, hcad_final, phi)
         row: dict[str, Any] = {
             "question_id": sample.get("question_id", f"{pool}-{idx + 1}"),
             "question": query,
@@ -244,10 +274,7 @@ def run_ranking_experiments(
             "strategies": {},
         }
         for strategy, contexts in variants.items():
-            relevance = _ranked_relevance(reference, contexts)
-            recall = recall_at_k(relevance, k=RETRIEVAL_K)
-            ndcg = ndcg_at_k(relevance, k=RETRIEVAL_K)
-            mrr = _reciprocal_rank(relevance)
+            recall, ndcg, mrr = _metrics_for_ranking(reference, contexts, initial_relevance)
             metric_values[strategy]["recall_at_5"].append(float(recall))
             metric_values[strategy]["ndcg_at_5"].append(float(ndcg))
             metric_values[strategy]["mrr_at_5"].append(float(mrr))
@@ -255,8 +282,8 @@ def run_ranking_experiments(
                 "recall_at_5": float(recall),
                 "ndcg_at_5": float(ndcg),
                 "mrr_at_5": float(mrr),
-                "top5_sources": [str(c.get("source") or "unknown") for c in contexts],
-                "top5_text": [_text(c) for c in contexts],
+                "top5_sources": [str(c.get("source") or "unknown") for c in contexts[:RETRIEVAL_K]],
+                "top5_text": [_text(c) for c in contexts[:RETRIEVAL_K]],
             }
         diagnostics["gold_in_hcad_final_top5"] += int(
             any(_ranked_relevance(reference, hcad_final[:RETRIEVAL_K]))
