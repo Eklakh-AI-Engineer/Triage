@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -25,10 +26,22 @@ def _required_label(row: dict[str, Any], field: str, allowed: set[str]) -> str:
     return value
 
 
-def _rate(values: list[float]) -> dict[str, Any]:
+def _rate(values: list[float], *, seed: int = 20261029, iterations: int = 2000) -> dict[str, Any]:
     if not values:
-        return {"n": 0, "mean": None}
-    return {"n": len(values), "mean": sum(values) / len(values)}
+        return {"n": 0, "mean": None, "ci95": None}
+    rng, n = random.Random(seed), len(values)
+    means = sorted(
+        sum(values[rng.randrange(n)] for _ in range(n)) / n
+        for _ in range(iterations)
+    )
+    return {
+        "n": n,
+        "mean": sum(values) / n,
+        "ci95": [means[int(0.025 * (iterations - 1))], means[int(0.975 * (iterations - 1))]],
+        "ci_method": "percentile bootstrap over question-level annotations",
+        "seed": seed,
+        "iterations": iterations,
+    }
 
 
 def evaluate_clinical_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -59,6 +72,16 @@ def evaluate_clinical_answers(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not isinstance(row.get("abstention_expected"), bool) or not isinstance(row.get("abstained"), bool):
             raise ValueError(f"Row {index} requires boolean abstention_expected and abstained")
         grouped[system].append(row)
+
+    # Multi-system quality comparisons must use the same question IDs.
+    if len(grouped) > 1:
+        question_sets = {name: {str(r["question_id"]) for r in items} for name, items in grouped.items()}
+        reference_name = next(iter(question_sets))
+        reference_ids = question_sets[reference_name]
+        mismatched = {name: sorted(reference_ids.symmetric_difference(ids))
+                      for name, ids in question_sets.items() if ids != reference_ids}
+        if mismatched:
+            raise ValueError(f"Clinical systems must be evaluated on identical question IDs: {mismatched}")
 
     summaries: dict[str, Any] = {}
     for system, items in sorted(grouped.items()):
