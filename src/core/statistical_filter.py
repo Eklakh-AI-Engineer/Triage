@@ -16,7 +16,7 @@ class StatisticalFilter:
         self.k = k
 
     def compute_threshold(
-        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None,
+        self, scores: np.ndarray, k: Optional[float] = None,
         tau_sat: Optional[float] = None,
     ) -> tuple[float, float, float]:
         """Compute adaptive threshold from similarity score distribution.
@@ -48,7 +48,7 @@ class StatisticalFilter:
         return threshold, mu, sigma
 
     def heaviside_filter(
-        self, scores: np.ndarray | torch.Tensor, k: Optional[float] = None,
+        self, scores: np.ndarray, k: Optional[float] = None,
         tau_sat: Optional[float] = None,
     ) -> np.ndarray:
         """Apply Heaviside step function: 1 if score >= threshold else 0."""
@@ -70,12 +70,21 @@ class StatisticalFilter:
         Gate 1: absolute quality floor - reject anything below min_score.
         Gate 2: relative Heaviside threshold on surviving candidates.
         """
-        if not contexts:
-            return []
-
         scores = np.asarray(scores, dtype=float)
+        if scores.ndim != 1:
+            raise ValueError(f"Expected a 1-D score array, got shape {scores.shape}")
         if len(contexts) != len(scores):
             raise ValueError(f"Mismatch: {len(contexts)} contexts vs {len(scores)} scores")
+        if not np.isfinite(scores).all():
+            raise ValueError("Non-finite scores supplied to context filtering")
+        if not np.isfinite(min_score):
+            raise ValueError("min_score must be finite")
+        if max_top_k is not None and (
+            not isinstance(max_top_k, int) or isinstance(max_top_k, bool) or max_top_k < 0
+        ):
+            raise ValueError("max_top_k must be a non-negative integer or None")
+        if not contexts:
+            return []
 
         # Gate 1: absolute quality floor
         above_floor = scores >= min_score
@@ -89,17 +98,27 @@ class StatisticalFilter:
         gate1_contexts = [ctx for ctx, keep in zip(contexts, above_floor) if keep]
         gate1_scores = scores[above_floor]
 
-        # Gate 2: relative Heaviside threshold on survivors
-        mask = self.heaviside_filter(gate1_scores, k=k)
+        # Gate 2: relative Heaviside threshold on survivors. Bound the
+        # threshold by the best eligible score: mu + k*sigma can exceed
+        # max(scores) for skewed/small pools, which otherwise rejects every
+        # candidate even though at least one passed Gate 1. This is not a
+        # forced admission of low-quality evidence: Gate 1 remains mandatory.
+        threshold, mu, sigma = self.compute_threshold(gate1_scores, k=k)
+        threshold = min(threshold, float(np.max(gate1_scores)))
+        mask = gate1_scores >= threshold
         filtered = [
             {**ctx, score_key: float(gate1_scores[i])}
             for i, ctx in enumerate(gate1_contexts)
-            if mask[i] == 1
+            if mask[i]
         ]
 
-        if not filtered:
-            logger.info("All candidates fell below Heaviside threshold; returning empty.")
-            return []
+        logger.debug(
+            "Dual gate: input=%d above_floor=%d kept=%d min=%.4f "
+            "max=%.4f mean=%.4f std=%.4f threshold=%.4f",
+            len(contexts), len(gate1_contexts), len(filtered),
+            float(np.min(gate1_scores)), float(np.max(gate1_scores)),
+            mu, sigma, threshold,
+        )
 
         filtered.sort(key=lambda c: c[score_key], reverse=True)
         if max_top_k is not None:

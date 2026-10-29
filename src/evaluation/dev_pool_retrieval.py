@@ -42,36 +42,40 @@ from src.evaluation.run_base_paper_benchmark import (
 
 logger = logging.getLogger(__name__)
 
-def _pool_based_metrics(reference: str, ranked_contexts: list[dict], candidate_pool: list[dict]) -> tuple[float, float]:
-    """Compute top-k metrics against the full candidate-pool relevance set.
+# Pre-registered minimum acceptance criteria. Environment overrides may
+# make the gate stricter, but can never silently relax the release criteria.
+_MIN_GO_DELTA_RECALL = 0.08
+_MIN_GO_DELTA_NDCG = 0.06
 
-    Using only returned top-k contexts as the denominator makes recall collapse
-    to a hit indicator. The candidate pool supplies the denominator and ideal
-    ranking for both Recall@K and NDCG@K.
-    """
-    ranked_rel = _ranked_relevance(reference, ranked_contexts)
-    pool_rel = _ranked_relevance(reference, candidate_pool)
-    total_relevant = sum(pool_rel)
-    recall = sum(ranked_rel[:RETRIEVAL_K]) / total_relevant if total_relevant else 0.0
-    ideal = sorted(pool_rel, reverse=True)[:RETRIEVAL_K]
-    ideal_discount = np.log2(np.arange(2, len(ideal) + 2))
-    idcg = float(np.sum(np.asarray(ideal, dtype=float) / ideal_discount)) if ideal else 0.0
-    top = ranked_rel[:RETRIEVAL_K]
-    discounts = np.log2(np.arange(2, len(top) + 2))
-    dcg = float(np.sum(np.asarray(top, dtype=float) / discounts)) if top else 0.0
-    return float(recall), float(dcg / idcg if idcg else 0.0)
-# Acceptance thresholds must match the protocol documented above. Environment
-# overrides may tighten these thresholds, but cannot silently weaken them.
-GO_DELTA_RECALL = max(0.08, float(os.environ.get("HCAD_GO_DELTA_RECALL", "0.08")))
-GO_DELTA_NDCG = max(0.06, float(os.environ.get("HCAD_GO_DELTA_NDCG", "0.06")))
+
+def _gate_target(name: str, minimum: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return minimum
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    if value < minimum:
+        raise ValueError(
+            f"{name}={value} weakens the pre-registered minimum {minimum}; "
+            "gate targets may only be made stricter."
+        )
+    return value
+
+
+GO_DELTA_RECALL = _gate_target("HCAD_GO_DELTA_RECALL", _MIN_GO_DELTA_RECALL)
+GO_DELTA_NDCG = _gate_target("HCAD_GO_DELTA_NDCG", _MIN_GO_DELTA_NDCG)
 
 # (name, env overrides). The baseline disables masking and vocab mapping and
 # pins the desc expansion rule so the paired comparison isolates exactly
 # the Deliverable-B changes against a pure Phase 3 baseline.
 CONFIGS = [
-    ("baseline", {"HCAD_PRESENCE_MASKING": "0", "HCAD_RELATION_VOCAB": "0", "HCAD_EXPANSION_RULE": "desc"}),
-    ("masking", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "0"}),
-    ("masking_vocab", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "1"}),
+    ("baseline", {"HCAD_PRESENCE_MASKING": "0", "HCAD_RELATION_VOCAB": "0", "HCAD_EXPANSION_RULE": "desc", "HCAD_TAU_SAT": None}),
+    ("masking", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "0", "HCAD_TAU_SAT": None}),
+    ("masking_vocab", {"HCAD_PRESENCE_MASKING": "1", "HCAD_RELATION_VOCAB": "1", "HCAD_TAU_SAT": None}),
 ]
 
 
@@ -93,6 +97,11 @@ def _env_overrides(overrides: Dict[str, Optional[str]]) -> Iterator[None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = old
+
+
+def meets_go_gate(delta_recall: float, delta_ndcg: float) -> bool:
+    """Return whether both pre-registered development improvements are met."""
+    return delta_recall >= GO_DELTA_RECALL and delta_ndcg >= GO_DELTA_NDCG
 
 
 def _hub_anchor_fraction(hcad_rag, contexts: list, degree_cap: int) -> bool:
@@ -222,6 +231,11 @@ def _evaluate_config(
 ) -> Dict[str, Any]:
     """Run HCAD retrieval over the pool under one configuration."""
     ndcgs, recalls, gold_scores = [], [], []
+    candidate_pool_sizes = []
+    candidate_gold_hits = []
+    phi_top5_gold_hits = []
+    gold_candidate_source_counts: Dict[str, int] = {}
+    candidate_source_counts: Dict[str, int] = {}
     n_query_missing_rel = n_query_missing_mod = 0
     n_cand_missing_rel = n_cand_missing_mod = n_candidates = 0
 
@@ -242,11 +256,24 @@ def _evaluate_config(
             p_q = getattr(hcad_rag, "_last_query_presence", None)
             p_c = getattr(hcad_rag, "_last_candidate_presence", None)
 
-            if pool and phi is not None and len(phi) == len(pool):
+            if pool:
+                candidate_pool_sizes.append(len(pool))
+                for ctx in pool:
+                    source = str(ctx.get("source", "unknown"))
+                    candidate_source_counts[source] = candidate_source_counts.get(source, 0) + 1
                 pool_rel = _ranked_relevance(reference, pool)
-                gold_idx = [i for i, r in enumerate(pool_rel) if r == 1]
-                if gold_idx:
-                    gold_scores.append(float(np.max([phi[i] for i in gold_idx])))
+                gold_idx = [i for i, r in enumerate(pool_rel) if r > 0]
+                candidate_gold_hits.append(bool(gold_idx))
+                for i in gold_idx:
+                    source = str(pool[i].get("source", "unknown"))
+                    gold_candidate_source_counts[source] = (
+                        gold_candidate_source_counts.get(source, 0) + 1
+                    )
+                if phi is not None and len(phi) == len(pool):
+                    if gold_idx:
+                        gold_scores.append(float(np.max([phi[i] for i in gold_idx])))
+                    phi_order = np.argsort(np.asarray(phi, dtype=float))[::-1][:RETRIEVAL_K]
+                    phi_top5_gold_hits.append(any(i in gold_idx for i in phi_order))
 
             if p_q is not None:
                 p_q = np.asarray(p_q).ravel()
@@ -264,6 +291,20 @@ def _evaluate_config(
         "num_samples": n,
         "mean_ndcg_at_k": round(float(np.mean(ndcgs)), 4) if n else 0.0,
         "mean_recall_at_k": round(float(np.mean(recalls)), 4) if n else 0.0,
+        "candidate_survival_diagnostics": {
+            "mean_candidate_pool_size": round(float(np.mean(candidate_pool_sizes)), 2)
+            if candidate_pool_sizes else 0.0,
+            "gold_present_in_candidate_pool_frac": round(float(np.mean(candidate_gold_hits)), 4)
+            if candidate_gold_hits else None,
+            "gold_in_phi_top_k_frac": round(float(np.mean(phi_top5_gold_hits)), 4)
+            if phi_top5_gold_hits else None,
+            # Counts of gold-relevant candidates by source. Candidate-level
+            # "score" values are source-specific (e.g. graph importance vs.
+            # vector similarity), so comparing them in one raw-score top-k
+            # ranking would be misleading and is intentionally omitted.
+            "gold_candidate_source_counts": dict(sorted(gold_candidate_source_counts.items())),
+            "candidate_source_counts": dict(sorted(candidate_source_counts.items())),
+        },
         "gold_score_percentiles": {
             "p25": round(float(np.percentile(gold_scores, TAU_SAT_PERCENTILE)), 4)
             if gold_scores else None,
@@ -286,6 +327,13 @@ def run_retrieval_eval(
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Paired before/after retrieval evaluation on the development pool."""
+
+    if pool != "dev":
+        raise ValueError(
+            "The retrieval calibration harness is development-only. "
+            "The held-out test pool must remain untouched until the frozen "
+            "configuration passes the documented GO gate."
+        )
     logger.info(
         "Deliverable-B dev-pool retrieval eval (n=%d, pool=%s, k=%d)",
         num_samples, pool, RETRIEVAL_K,
@@ -326,7 +374,27 @@ def run_retrieval_eval(
         logger.info("Evaluating configuration: %s", name)
         results[name] = _evaluate_config(hcad_rag, samples, env)
 
-    # 4: full configuration with the Gate-2 saturation cap. tau_sat is
+    # Diagnostic recommended in the review: isolate the saturation cap
+    # while preserving legacy retrieval defaults (masking/vocab OFF).
+    # Calibrate this cap from the legacy baseline's own gold dev scores.
+    baseline_tau = results["baseline"]["gold_score_percentiles"]["p25"]
+    if baseline_tau is None:
+        results["baseline_with_tau_cap"] = None
+        logger.warning("No baseline gold candidate scores; baseline cap ablation unavailable.")
+    else:
+        results["baseline_tau_sat"] = round(float(baseline_tau), 4)
+        results["baseline_with_tau_cap"] = _evaluate_config(
+            hcad_rag,
+            samples,
+            {
+                "HCAD_PRESENCE_MASKING": "0",
+                "HCAD_RELATION_VOCAB": "0",
+                "HCAD_EXPANSION_RULE": "desc",
+                "HCAD_TAU_SAT": str(baseline_tau),
+            },
+        )
+
+    # Full configuration with the Gate-2 saturation cap. tau_sat is
     # calibrated from the gold candidate scores of the masking+vocab run -
     # calibration and measurement both stay on the dev pool.
     tau_sat_value = results["masking_vocab"]["gold_score_percentiles"]["p25"]
@@ -357,7 +425,7 @@ def run_retrieval_eval(
             "recall_at_k": round(d_recall, 4),
             "ndcg_at_k": round(d_ndcg, 4),
         }
-        is_go = d_recall >= GO_DELTA_RECALL and d_ndcg >= GO_DELTA_NDCG
+        is_go = meets_go_gate(d_recall, d_ndcg)
         results["go_stop"] = {
             "required_delta_recall": GO_DELTA_RECALL,
             "required_delta_ndcg": GO_DELTA_NDCG,

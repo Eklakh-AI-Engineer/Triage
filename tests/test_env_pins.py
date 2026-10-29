@@ -5,7 +5,7 @@ came from dependency drift in the freshly-built env, not from our code:
 the notebook rebuilds the env every run from ranges, and a newly released
 transitive dependency flowed in. The suite now fails loudly - before the
 smoke test, before training - if the resolver produced a different stack
-than the one every successful run used.
+than the explicitly pinned, SciSpacy-compatible stack.
 """
 
 def test_pinned_low_level_stack():
@@ -15,9 +15,9 @@ def test_pinned_low_level_stack():
     assert murmurhash_version in ("1.0.12", "1.0.15"), (
         f"murmurhash {murmurhash_version}: expected pinned 1.0.12 or 1.0.15 "
         "- SciSpacy tokenizer overflow is handled via English tokenizer fallback in ner_extractor")
-    assert numpy.__version__ == "2.5.4", (
-        f"numpy {numpy.__version__}: expected the pinned 2.5.4 - the "
-        "version every successful run used")
+    assert numpy.__version__ == "1.26.4", (
+        f"numpy {numpy.__version__}: expected the pinned 1.26.4 required "
+        "for SciSpacy 0.6.x compatibility")
 
 def test_pinned_core_stack():
     import chromadb

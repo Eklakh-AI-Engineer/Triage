@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-and-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install project dependencies (CPU-only PyTorch)
+        run: |
+          python -m pip install --upgrade pip
+          # The default PyPI torch wheel pulls CUDA libraries and exhausts the
+          # GitHub-hosted runner disk. CI tests CPU code, so constrain torch to
+          # the CPU wheel while preserving the project's dependency resolver.
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            -c .github/constraints-ci.txt -r requirements.txt
+
+      - name: Install pinned SciSpacy NER models
+        run: |
+          python -m pip install --no-deps https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+          python -m pip install --no-deps https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
+
+      - name: Verify runtime dependency contract
+        run: |
+          python - <<'PY'
+          import numpy, spacy, chromadb
+          assert tuple(int(x) for x in numpy.__version__.split(".")[:2]) < (2, 0), numpy.__version__
+          assert spacy.__version__ == "3.8.11", spacy.__version__
+          assert chromadb.__version__ == "1.5.9", chromadb.__version__
+          print("numpy", numpy.__version__, "spacy", spacy.__version__, "chromadb", chromadb.__version__)
+          PY
+
+      - name: Validate notebook JSON
+        run: python -c "import json; json.load(open('deploy/kaggle_triage.ipynb', encoding='utf-8'))"
+
+      - name: Run test suite
+        run: python -m pytest -q
