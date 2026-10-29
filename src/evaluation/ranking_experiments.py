@@ -242,7 +242,8 @@ def run_ranking_experiments(
         candidates = list(getattr(retriever, "_last_candidate_pool", None) or [])
         filtered_pool = list(getattr(retriever, "_last_filtered_pool", None) or [])
         post_gate_pool = list(getattr(retriever, "_last_post_gate_pool", None) or [])
-        phi = np.asarray(getattr(retriever, "_last_phi_scores", [])).ravel()
+        phi_value = getattr(retriever, "_last_phi_scores", None)
+        phi = np.asarray(phi_value if phi_value is not None else [], dtype=float).ravel()
         if candidates and len(phi) != len(candidates):
             raise RuntimeError("Candidate/score alignment mismatch; aborting evaluation.")
 
