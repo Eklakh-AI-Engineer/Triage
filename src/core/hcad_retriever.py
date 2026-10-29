@@ -484,6 +484,14 @@ class HCADRetriever:
         """Retrieve and rank candidate contexts using decoupled structural similarity and adaptive filtering."""
         self._ensure_components()
         k = k if k is not None else self.k
+        # Reset per-query diagnostic snapshots so empty/error paths cannot leak
+        # candidate evidence from the preceding query in a benchmark batch.
+        self._last_candidate_pool = None
+        self._last_filtered_pool = None
+        self._last_post_gate_pool = None
+        self._last_phi_scores = None
+        self._last_query_presence = None
+        self._last_candidate_presence = None
 
         entities = self._ner.extract_entities(query)
         relations = self._relation_extractor.extract_rules(query, entities)
