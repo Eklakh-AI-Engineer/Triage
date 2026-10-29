@@ -8,7 +8,6 @@ does not replace independently adjudicated clinical relevance labels.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import random
@@ -164,7 +163,7 @@ def _commit_sha() -> str | None:
         return os.getenv("GITHUB_SHA")
 
 
-def _check_test_gate(pool: str, output_dir: Path) -> dict[str, Any] | None:
+def _check_test_gate(pool: str, _output_dir: Path) -> dict[str, Any] | None:
     if pool != "test":
         return None
     gate_path = os.getenv("HCAD_DEV_GO_ARTIFACT", "").strip()
@@ -177,6 +176,8 @@ def _check_test_gate(pool: str, output_dir: Path) -> dict[str, Any] | None:
     if not path.is_file():
         raise RuntimeError(f"Development GO artifact not found: {path}")
     artifact = json.loads(path.read_text(encoding="utf-8"))
+    if artifact.get("pool") != "dev":
+        raise RuntimeError("HCAD_DEV_GO_ARTIFACT must be produced from the development pool.")
     if (artifact.get("go_stop") or {}).get("decision") != "GO":
         raise RuntimeError("Held-out test evaluation is locked because dev decision is not GO.")
     current_commit = _commit_sha()
