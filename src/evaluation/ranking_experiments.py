@@ -219,6 +219,8 @@ def run_ranking_experiments(
         "n_queries": 0,
         "gold_in_initial_pool": 0,
         "gold_survives_phi_floor": 0,
+        "gold_survives_filter": 0,
+        "gold_survives_decision_gate": 0,
         "gold_in_hcad_final_top5": 0,
         "source_counts": {},
         "candidate_count": [],
@@ -237,6 +239,8 @@ def run_ranking_experiments(
         hcad_final = retriever.retrieve(query)
         latency_ms = (time.perf_counter() - started) * 1000
         candidates = list(getattr(retriever, "_last_candidate_pool", None) or [])
+        filtered_pool = list(getattr(retriever, "_last_filtered_pool", None) or [])
+        post_gate_pool = list(getattr(retriever, "_last_post_gate_pool", None) or [])
         phi = np.asarray(getattr(retriever, "_last_phi_scores", [])).ravel()
         if candidates and len(phi) != len(candidates):
             raise RuntimeError("Candidate/score alignment mismatch; aborting evaluation.")
@@ -258,6 +262,8 @@ def run_ranking_experiments(
             if i < len(phi) and float(phi[i]) >= MIN_PHI_SCORE
         ]
         diagnostics["gold_survives_phi_floor"] += int(bool(phi_survivors))
+        diagnostics["gold_survives_filter"] += int(any(_ranked_relevance(reference, filtered_pool)))
+        diagnostics["gold_survives_decision_gate"] += int(any(_ranked_relevance(reference, post_gate_pool)))
         diagnostics["phi_rejected_count"].append(
             sum(1 for score in phi if float(score) < MIN_PHI_SCORE)
         )
@@ -272,6 +278,8 @@ def run_ranking_experiments(
             "source_counts": source_counts,
             "gold_in_initial_pool": bool(any(initial_relevance)),
             "gold_survives_phi_floor": bool(phi_survivors),
+            "gold_survives_filter": bool(any(_ranked_relevance(reference, filtered_pool))),
+            "gold_survives_decision_gate": bool(any(_ranked_relevance(reference, post_gate_pool))),
             "strategies": {},
         }
         for strategy, contexts in variants.items():
@@ -326,12 +334,15 @@ def run_ranking_experiments(
             **diagnostics,
             "initial_pool_gold_coverage": diagnostics["gold_in_initial_pool"] / n,
             "phi_floor_gold_survival": diagnostics["gold_survives_phi_floor"] / n,
+            "filter_gold_survival": diagnostics["gold_survives_filter"] / n,
+            "decision_gate_gold_survival": diagnostics["gold_survives_decision_gate"] / n,
             "hcad_final_top5_gold_coverage": diagnostics["gold_in_hcad_final_top5"] / n,
             "mean_candidate_count": float(np.mean(diagnostics["candidate_count"])),
             "mean_phi_rejected_count": float(np.mean(diagnostics["phi_rejected_count"])),
             "interpretation": (
                 "Low initial-pool gold coverage points to candidate generation/entity linking; "
-                "high initial coverage but low phi-floor/final-top5 coverage points to filtering/ranking."
+                "loss between phi-floor, filter, and decision-gate survival identifies the stage "
+                "that removes gold evidence; high post-gate coverage but low top-5 coverage points to ranking."
             ),
         },
         "per_question": per_question,
