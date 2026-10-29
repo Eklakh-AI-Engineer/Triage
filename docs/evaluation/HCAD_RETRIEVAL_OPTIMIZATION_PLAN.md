@@ -88,3 +88,8 @@ python -m src.evaluation.clinical_answer_quality --annotations data/evaluation/c
 - The ranking script is an offline comparison, not a production strategy switch. A candidate ranking is adopted only after the paired dev results and confidence intervals support it.
 - The clinical quality scorer requires human/curator annotations and provider telemetry. It does not manufacture labels, prices, or a pass result.
 - CI and an actual runtime evaluation must pass before this branch can be called validated. No performance gain is claimed by adding these evaluation tools.
+
+
+### Metric correction note
+
+The development evaluator now computes Recall@5 and NDCG@5 against relevance across the full pre-gate candidate pool, rather than using only the returned top-k contexts as the denominator. The old behavior could make Recall@5 behave like a hit indicator when any relevant item appeared in the returned list. Historical dev metrics and GO/STOP decisions therefore must be treated as non-comparable until rerun on this corrected code and exact commit.
