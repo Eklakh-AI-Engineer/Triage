@@ -1,6 +1,6 @@
 import unittest
 
-from src.evaluation.ranking_experiments import reciprocal_rank_fusion
+from src.evaluation.ranking_experiments import reciprocal_rank_fusion, _metrics_for_ranking
 from src.evaluation.clinical_answer_quality import evaluate_clinical_answers
 
 
@@ -16,6 +16,21 @@ class TestReciprocalRankFusion(unittest.TestCase):
         self.assertEqual(fused[0]["document"], "shared candidate")
         self.assertEqual(len([r for r in fused if r["document"] == "shared candidate"]), 1)
         self.assertEqual(set(fused[0]["sources"]), {"dense", "graph"})
+
+
+    def test_recall_uses_shared_full_candidate_pool_denominator(self):
+        pool = [
+            {"document": "gold alpha evidence", "source": "vector", "score": 0.9},
+            {"document": "gold beta evidence", "source": "graph", "score": 0.8},
+            {"document": "irrelevant distractor", "source": "vector", "score": 0.7},
+        ]
+        ranked = [pool[0], pool[2], pool[1]]
+        recall, ndcg, mrr = _metrics_for_ranking(
+            "gold alpha evidence gold beta evidence", ranked, [1, 1, 0], k=1
+        )
+        self.assertAlmostEqual(recall, 0.5)
+        self.assertGreater(ndcg, 0.0)
+        self.assertEqual(mrr, 1.0)
 
     def test_fusion_is_deterministic_and_validates_k(self):
         rows = [
