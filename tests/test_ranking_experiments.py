@@ -2,6 +2,7 @@ import unittest
 
 from src.evaluation.ranking_experiments import reciprocal_rank_fusion, _metrics_for_ranking
 from src.evaluation.clinical_answer_quality import evaluate_clinical_answers
+from src.evaluation.dev_pool_retrieval import _pool_based_metrics
 
 
 class TestReciprocalRankFusion(unittest.TestCase):
@@ -41,6 +42,19 @@ class TestReciprocalRankFusion(unittest.TestCase):
         with self.assertRaises(ValueError):
             reciprocal_rank_fusion(rows, rrf_k=0)
 
+
+class TestPoolBasedRetrievalMetrics(unittest.TestCase):
+    def test_recall_denominator_uses_all_relevant_pool_candidates(self):
+        pool = [
+            {"document": "gold alpha evidence", "source": "vector"},
+            {"document": "gold beta evidence", "source": "graph"},
+            {"document": "irrelevant distractor", "source": "vector"},
+        ]
+        recall, ndcg = _pool_based_metrics(
+            "gold alpha evidence gold beta evidence", [pool[0]], pool
+        )
+        self.assertAlmostEqual(recall, 0.5)
+        self.assertGreater(ndcg, 0.0)
 
 class TestClinicalAnswerQuality(unittest.TestCase):
     def test_reports_independent_labels_and_telemetry(self):
