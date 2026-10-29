@@ -23,9 +23,11 @@ untouched until the GO decision.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
@@ -280,7 +282,21 @@ def run_retrieval_eval(
             "mode). Refusing to run dev-pool retrieval evaluation on degraded features."
         )
 
-    results: Dict[str, Any] = {"pool": pool, "num_samples": len(samples), "k": RETRIEVAL_K}
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        git_commit = os.getenv("GITHUB_SHA")
+    question_payload = json.dumps(
+        [(s.get("question"), s.get("source_chunk_id"), s.get("pool")) for s in samples],
+        ensure_ascii=False, separators=(",", ":"),
+    )
+    results: Dict[str, Any] = {
+        "pool": pool,
+        "num_samples": len(samples),
+        "k": RETRIEVAL_K,
+        "git_commit": git_commit,
+        "question_set_sha256": hashlib.sha256(question_payload.encode("utf-8")).hexdigest(),
+    }
 
     # 1-3: baseline / masking / masking+vocab (paired, same questions).
     for name, env in CONFIGS:
