@@ -101,6 +101,8 @@ class HCADRetriever:
         self._last_tensor_inputs: Optional[tuple] = None
         self._last_channel_sims: Optional["np.ndarray"] = None
         self._last_candidate_pool: Optional[list] = None
+        self._last_filtered_pool: Optional[list] = None
+        self._last_post_gate_pool: Optional[list] = None
 
     def _handle_vector_error(self, exc: Exception) -> None:
         logger.warning("Vector store retrieval failed: %s", exc)
@@ -627,6 +629,9 @@ class HCADRetriever:
             k=k,
             max_top_k=MAX_EVIDENCE_ITEMS,
         )
+        # Preserve stage-level evidence for diagnostics; these snapshots are
+        # read-only evaluation metadata and do not alter production ranking.
+        self._last_filtered_pool = list(filtered)
 
         # the previous "Fix #2" re-admitted candidates
         # BELOW the absolute floor Phi_min = 0.10 whenever both gates rejected
@@ -639,11 +644,13 @@ class HCADRetriever:
                 "Abstaining from retrieval - parametric mode.",
                 len(candidates), MIN_PHI_SCORE,
             )
+            self._last_post_gate_pool = []
             return []
 
         # JEV-inspired Decision Gate: Verify relevance & prune token bloat
         if self._decision_gate is not None:
             filtered = self._decision_gate.verify_and_prune_candidates(filtered, query)
+        self._last_post_gate_pool = list(filtered)
 
         return filtered
 
