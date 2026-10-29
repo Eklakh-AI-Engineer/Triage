@@ -1,6 +1,6 @@
 import unittest
 
-from src.evaluation.ranking_experiments import reciprocal_rank_fusion, _metrics_for_ranking
+from src.evaluation.ranking_experiments import _metrics_for_ranking, reciprocal_rank_fusion
 from src.evaluation.clinical_answer_quality import evaluate_clinical_answers
 from src.evaluation.dev_pool_retrieval import _pool_based_metrics
 
