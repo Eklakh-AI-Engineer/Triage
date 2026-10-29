@@ -34,7 +34,6 @@ from typing import Any, Dict, Iterator, Optional
 import numpy as np
 
 from src.config import RESULTS_DIR, TAU_SAT_PERCENTILE
-from src.evaluation.metrics import ndcg_at_k, recall_at_k
 from src.evaluation.run_base_paper_benchmark import (
     RETRIEVAL_K,
     _ranked_relevance,
@@ -43,6 +42,24 @@ from src.evaluation.run_base_paper_benchmark import (
 
 logger = logging.getLogger(__name__)
 
+def _pool_based_metrics(reference: str, ranked_contexts: list[dict], candidate_pool: list[dict]) -> tuple[float, float]:
+    """Compute top-k metrics against the full candidate-pool relevance set.
+
+    Using only returned top-k contexts as the denominator makes recall collapse
+    to a hit indicator. The candidate pool supplies the denominator and ideal
+    ranking for both Recall@K and NDCG@K.
+    """
+    ranked_rel = _ranked_relevance(reference, ranked_contexts)
+    pool_rel = _ranked_relevance(reference, candidate_pool)
+    total_relevant = sum(pool_rel)
+    recall = sum(ranked_rel[:RETRIEVAL_K]) / total_relevant if total_relevant else 0.0
+    ideal = sorted(pool_rel, reverse=True)[:RETRIEVAL_K]
+    ideal_discount = np.log2(np.arange(2, len(ideal) + 2))
+    idcg = float(np.sum(np.asarray(ideal, dtype=float) / ideal_discount)) if ideal else 0.0
+    top = ranked_rel[:RETRIEVAL_K]
+    discounts = np.log2(np.arange(2, len(top) + 2))
+    dcg = float(np.sum(np.asarray(top, dtype=float) / discounts)) if top else 0.0
+    return float(recall), float(dcg / idcg if idcg else 0.0)
 # Acceptance thresholds must match the protocol documented above. Environment
 # overrides may tighten these thresholds, but cannot silently weaken them.
 GO_DELTA_RECALL = max(0.08, float(os.environ.get("HCAD_GO_DELTA_RECALL", "0.08")))
@@ -213,9 +230,10 @@ def _evaluate_config(
             query = sample["question"]
             reference = sample.get("reference", "")
             contexts = hcad_rag.retrieve(query)
-            relevance = _ranked_relevance(reference, contexts)
-            ndcgs.append(ndcg_at_k(relevance, k=RETRIEVAL_K))
-            recalls.append(recall_at_k(relevance, k=RETRIEVAL_K))
+            candidate_pool = list(getattr(hcad_rag, "_last_candidate_pool", None) or [])
+            recall, ndcg = _pool_based_metrics(reference, contexts, candidate_pool)
+            ndcgs.append(ndcg)
+            recalls.append(recall)
 
             # Pre-gate provenance: gold candidate score for tau_sat
             # calibration, plus channel-presence diagnostics.
