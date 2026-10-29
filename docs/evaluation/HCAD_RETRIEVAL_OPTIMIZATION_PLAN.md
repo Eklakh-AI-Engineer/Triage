@@ -56,3 +56,35 @@ A citation that points to an existing item is not necessarily a citation that su
 ## Current evidence / decision
 
 Previous logged development runs showed masking and relation-vocabulary configurations below the baseline. Those results motivate the ablations but are not a substitute for a fresh run on the current commit and a validated corpus/index. The quarantined incomplete-vector-store benchmark artifacts must not be used as valid performance evidence.
+
+
+## Implementation added on the optimization branch
+
+### Paired retrieval ranking experiment
+
+Run on the development split (default; no held-out data is read):
+
+```bash
+python -m src.evaluation.ranking_experiments --samples 60 --pool dev
+```
+
+The JSON output records dense-only, graph-only, RRF, and production HCAD top-5 Recall/NDCG/MRR, question-level bootstrap 95% intervals, paired deltas versus dense-only, source counts, candidate-pool gold coverage, gold survival above the Phi floor, final HCAD top-5 coverage, per-question evidence and latency. The RRF implementation uses source-local ranks and does not compare raw cosine and graph scores.
+
+Held-out execution is fail-closed and requires `HCAD_DEV_GO_ARTIFACT` pointing to a development JSON with GO and the same recorded commit SHA. The held-out split should not be run until the exact commit's development experiment passes the documented gate.
+
+### Clinical answer annotation scoring
+
+`src/evaluation/clinical_answer_quality.py` aggregates independent annotations for factual correctness, citation support, negation handling and abstention decisions. It accepts optional latency, token and cost telemetry. It deliberately does not infer clinical labels from generated text; cost is reported only when supplied by telemetry.
+
+Expected JSONL fields per question/system: `question_id`, `system`, `answer`, `factuality_label` (`correct|partially_correct|incorrect`), `citation_support_label` (`supported|partially_supported|unsupported|not_applicable`), `negation_label` (`correct|incorrect|not_applicable`), `abstention_expected` and `abstained` booleans. Optional fields are `latency_ms`, `input_tokens`, `output_tokens`, and `cost_usd`.
+
+```bash
+python -m src.evaluation.clinical_answer_quality --annotations data/evaluation/clinical_answer_annotations.jsonl --output results/clinical_answer_quality.json
+```
+
+### Current limitations
+
+- Retrieval labels use the existing source-chunk Jaccard overlap protocol (threshold 0.30); report this limitation and validate with independently adjudicated evidence labels before making clinical relevance claims.
+- The ranking script is an offline comparison, not a production strategy switch. A candidate ranking is adopted only after the paired dev results and confidence intervals support it.
+- The clinical quality scorer requires human/curator annotations and provider telemetry. It does not manufacture labels, prices, or a pass result.
+- CI and an actual runtime evaluation must pass before this branch can be called validated. No performance gain is claimed by adding these evaluation tools.
