@@ -23,16 +23,17 @@ untouched until the GO decision.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
 import numpy as np
 
 from src.config import RESULTS_DIR, TAU_SAT_PERCENTILE
-from src.evaluation.metrics import ndcg_at_k, recall_at_k
 from src.evaluation.run_base_paper_benchmark import (
     RETRIEVAL_K,
     _ranked_relevance,
@@ -155,6 +156,11 @@ def run_hub_ablation(
         "Phase-4a hub ablation (n=%d, pool=%s, cap=%d)",
         num_samples, pool, hub_degree_cap(),
     )
+    if pool == "test":
+        # Fail closed when invoked directly, not only through the notebook gate.
+        from src.evaluation.ranking_experiments import _check_test_gate
+        _check_test_gate("test", RESULTS_DIR)
+
     samples = generate_paper_protocol_questions(num_samples, pool=pool)
     if not samples:
         raise RuntimeError(f"No {pool}-pool questions available for the hub ablation.")
@@ -238,9 +244,10 @@ def _evaluate_config(
             query = sample["question"]
             reference = sample.get("reference", "")
             contexts = hcad_rag.retrieve(query)
-            relevance = _ranked_relevance(reference, contexts)
-            ndcgs.append(ndcg_at_k(relevance, k=RETRIEVAL_K))
-            recalls.append(recall_at_k(relevance, k=RETRIEVAL_K))
+            candidate_pool = list(getattr(hcad_rag, "_last_candidate_pool", None) or [])
+            recall, ndcg = _pool_based_metrics(reference, contexts, candidate_pool)
+            ndcgs.append(ndcg)
+            recalls.append(recall)
 
             # Pre-gate provenance: gold candidate score for tau_sat
             # calibration, plus channel-presence diagnostics.
@@ -346,7 +353,21 @@ def run_retrieval_eval(
             "mode). Refusing to run dev-pool retrieval evaluation on degraded features."
         )
 
-    results: Dict[str, Any] = {"pool": pool, "num_samples": len(samples), "k": RETRIEVAL_K}
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        git_commit = os.getenv("GITHUB_SHA")
+    question_payload = json.dumps(
+        [(s.get("question"), s.get("source_chunk_id"), s.get("pool")) for s in samples],
+        ensure_ascii=False, separators=(",", ":"),
+    )
+    results: Dict[str, Any] = {
+        "pool": pool,
+        "num_samples": len(samples),
+        "k": RETRIEVAL_K,
+        "git_commit": git_commit,
+        "question_set_sha256": hashlib.sha256(question_payload.encode("utf-8")).hexdigest(),
+    }
 
     # 1-3: baseline / masking / masking+vocab (paired, same questions).
     for name, env in CONFIGS:

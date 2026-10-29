@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import random
 import sys
 import time
 from pathlib import Path
@@ -623,6 +624,12 @@ def generate_paper_protocol_questions(num_samples: int, generator=None,
 def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                   question_pool: str = "test"):
     """Execute complete base paper evaluation benchmark across the 3 systems."""
+    if question_pool == "test":
+        # Enforce the same-commit development gate for direct CLI calls too;
+        # notebook-level gating alone is too easy to bypass accidentally.
+        from src.evaluation.ranking_experiments import _check_test_gate
+        _check_test_gate("test", RESULTS_DIR)
+
     # Fail closed: results are not publishable without a complete corpus/index
     # manifest tied to the exact source inputs and embedding/index versions.
     from src.evaluation.integrity import validate_integrity_manifest
@@ -1047,7 +1054,51 @@ def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
         else:
             significance_testing[comparison] = None
 
+    def _bootstrap_summary(values: List[float], seed: int = RANDOM_SEED, iterations: int = 2000) -> Dict[str, Any]:
+        if not values:
+            return {"n": 0, "mean": None, "ci95": None}
+        rng = random.Random(seed)
+        n_values = len(values)
+        means = sorted(
+            sum(values[rng.randrange(n_values)] for _ in range(n_values)) / n_values
+            for _ in range(iterations)
+        )
+        return {
+            "n": n_values,
+            "mean": sum(values) / n_values,
+            "ci95": [means[int(0.025 * (iterations - 1))], means[int(0.975 * (iterations - 1))]],
+            "method": "question-level percentile bootstrap",
+            "seed": seed,
+            "iterations": iterations,
+        }
+
+    score_dimensions = ["comprehensiveness", "diversity", "empowerment", "logical", "readability", "overall_score"]
+    scoring_confidence_intervals = {
+        system: {
+            dimension: _bootstrap_summary(
+                [float(row["scores"][system][dimension]) for row in per_question
+                 if system in row.get("scores", {}) and row["scores"][system].get(dimension) is not None],
+                seed=RANDOM_SEED + system_idx * 31 + dim_idx,
+            )
+            for dim_idx, dimension in enumerate(score_dimensions)
+        }
+        for system_idx, system in enumerate(("Baseline LLM", "Vanilla RAG", "HCAD-RAG"))
+    }
+    paired_score_deltas = {}
+    for comparison, other_system in (("HCAD_vs_Vanilla", "Vanilla RAG"), ("HCAD_vs_Baseline", "Baseline LLM")):
+        paired_score_deltas[comparison] = {
+            dimension: _bootstrap_summary(
+                [float(row["scores"]["HCAD-RAG"][dimension]) - float(row["scores"][other_system][dimension])
+                 for row in per_question
+                 if all(row.get("scores", {}).get(system, {}).get(dimension) is not None
+                        for system in ("HCAD-RAG", other_system))],
+                seed=RANDOM_SEED + (1 if comparison == "HCAD_vs_Vanilla" else 2) * 101 + dim_idx,
+            )
+            for dim_idx, dimension in enumerate(score_dimensions)
+        }
     summary_results = {
+        "scoring_confidence_intervals": scoring_confidence_intervals,
+        "paired_score_delta_confidence_intervals": paired_score_deltas,
         "run_manifest": {  # provenance for every result file
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "num_samples": len(samples),
