@@ -39,6 +39,7 @@ from src.evaluation.run_base_paper_benchmark import (
     _ranked_relevance,
     generate_paper_protocol_questions,
 )
+from src.evaluation.metrics import ndcg_at_k, recall_at_k
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,47 @@ def _env_overrides(overrides: Dict[str, Optional[str]]) -> Iterator[None]:
 def meets_go_gate(delta_recall: float, delta_ndcg: float) -> bool:
     """Return whether both pre-registered development improvements are met."""
     return delta_recall >= GO_DELTA_RECALL and delta_ndcg >= GO_DELTA_NDCG
+
+
+def _pool_based_metrics(
+    reference: str,
+    ranked_contexts: list[dict[str, Any]],
+    candidate_pool: list[dict[str, Any]],
+    k: int = RETRIEVAL_K,
+) -> tuple[float, float]:
+    """Score a ranking using relevance from the full candidate pool.
+
+    Recall@K uses all relevant candidates in the shared pool as its denominator;
+    NDCG@K uses the pool's ideal ranking as its normalization baseline. This
+    prevents a truncated result list from inflating recall or NDCG.
+    """
+    if k <= 0:
+        raise ValueError("k must be positive")
+    pool_relevance = _ranked_relevance(reference, candidate_pool)
+    ranked_relevance = _ranked_relevance(reference, ranked_contexts)
+    total_relevant = sum(pool_relevance)
+    recall = (
+        sum(ranked_relevance[:k]) / total_relevant
+        if total_relevant
+        else 0.0
+    )
+    ideal = sorted(pool_relevance, reverse=True)[:k]
+    discounts = np.log2(np.arange(2, len(ideal) + 2))
+    idcg = (
+        float(np.sum(np.asarray(ideal, dtype=float) / discounts))
+        if ideal
+        else 0.0
+    )
+    top = ranked_relevance[:k]
+    top_discounts = np.log2(np.arange(2, len(top) + 2))
+    dcg = (
+        float(np.sum(np.asarray(top, dtype=float) / top_discounts))
+        if top
+        else 0.0
+    )
+    ndcg = dcg / idcg if idcg else 0.0
+    return float(recall), float(ndcg)
+
 
 
 def _hub_anchor_fraction(hcad_rag, contexts: list, degree_cap: int) -> bool:
