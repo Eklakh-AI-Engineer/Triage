@@ -130,6 +130,11 @@ def run_hub_ablation(
         "Phase-4a hub ablation (n=%d, pool=%s, cap=%d)",
         num_samples, pool, hub_degree_cap(),
     )
+    if pool == "test":
+        # Fail closed when invoked directly, not only through the notebook gate.
+        from src.evaluation.ranking_experiments import _check_test_gate
+        _check_test_gate("test", RESULTS_DIR)
+
     samples = generate_paper_protocol_questions(num_samples, pool=pool)
     if not samples:
         raise RuntimeError(f"No {pool}-pool questions available for the hub ablation.")
