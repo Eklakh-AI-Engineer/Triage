@@ -624,6 +624,12 @@ def generate_paper_protocol_questions(num_samples: int, generator=None,
 def run_benchmark(num_samples: int = 10, output_path: Optional[Path] = None,
                   question_pool: str = "test"):
     """Execute complete base paper evaluation benchmark across the 3 systems."""
+    if question_pool == "test":
+        # Enforce the same-commit development gate for direct CLI calls too;
+        # notebook-level gating alone is too easy to bypass accidentally.
+        from src.evaluation.ranking_experiments import _check_test_gate
+        _check_test_gate("test", RESULTS_DIR)
+
     # Fail closed: results are not publishable without a complete corpus/index
     # manifest tied to the exact source inputs and embedding/index versions.
     from src.evaluation.integrity import validate_integrity_manifest
